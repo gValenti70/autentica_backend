@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+gunicorn
+mysql-connector-python
+pillow
+pillow-avif-plugin
+python-dotenv
+openai
+pydantic
+pymongo
+bcrypt
