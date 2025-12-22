@@ -1,21 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[1]:
-
-
-# pip install pillow pillow-avif-plugin
-
-
-# In[2]:
-
-
-# !jupyter nbconvert --to script autentica_azure.ipynb
-
-
-# In[3]:
-
-
 import os
 import json
 import time
@@ -66,7 +48,7 @@ MAX_FOTO = int(os.getenv("MAX_FOTO", "7"))
 # MONGO CONFIG
 # ======================================================
 MONGO_URI = os.getenv("MONGO_URI", "")
-MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "tssanita")
+MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "autentica")
 
 
 # Collezioni (nomenclatura chiara)
@@ -1322,13 +1304,13 @@ def root():
 # In[ ]:
 
 
-# ======================================================
-# MAIN SERVER
-# ======================================================
-if __name__ == "__main__":
-    config = uvicorn.Config(app, host="127.0.0.1",port=8077)
-    server = uvicorn.Server(config)
-    await server.serve()
+# # ======================================================
+# # MAIN SERVER
+# # ======================================================
+# if __name__ == "__main__":
+#     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
+#     server = uvicorn.Server(config)
+#     await server.serve()
 
 
 # In[ ]:
@@ -1584,6 +1566,7 @@ if __name__ == "__main__":
 
 
 # In[ ]:
+
 
 
 
