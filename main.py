@@ -340,7 +340,7 @@ def load_vademecum_mongo(model: str, brand: str, db):
                 meta.update({
                     "source": "model_exact_token",
                     "match_type": "model_exact",
-                    "vademecum_id": str(doc.get("_id")),
+                    "vademecum_id": str(best.get("_id")),
                     "length_chars": len(text)
                 })
                 meta["debug"]["q1b_token_hit"] = t
@@ -381,6 +381,18 @@ def load_vademecum_mongo(model: str, brand: str, db):
 
         vlog.info(f"[Q2 ] best_score={best_score:.3f} best_token='{best_token}' best_candidate='{(best or {}).get('model_norm')}'")
 
+        # if best and best_score >= 0.60 and best.get("raw_text"):
+        #     text = best["raw_text"]
+        #     meta.update({
+        #         "source": "model_fuzzy",
+        #         "match_type": "model_fuzzy",
+        #         "vademecum_id": str(doc.get("_id")),
+        #         "fuzzy_score": round(best_score, 3),
+        #         "length_chars": len(text)
+        #     })
+        #     meta["debug"]["q2_best_token"] = best_token
+        #     meta["debug"]["q2_best_model_norm"] = best.get("model_norm")
+        #     return text, meta
         if best and best_score >= 0.60 and best.get("raw_text"):
             text = best["raw_text"]
             meta.update({
@@ -843,19 +855,38 @@ async def analizza_oggetto(input: InputAnalisi):
     # =========================
     # 4) Scelta prompt (finale SOLO se GPT ha detto basta)
     # =========================
+    # if step_corrente == 1:
+    #     prompt_name = "step1_identificazione"
+    # else:
+    #     prev = db[foto_col].find_one(
+    #         {"id_analisi": oid, "step": step_corrente - 1},
+    #         {"_id": 0, "json_response": 1}
+    #     )
+    #     prev_json = prev.get("json_response") if isinstance(prev, dict) else None
+
+    #     if isinstance(prev_json, dict) and prev_json.get("richiedi_altra_foto") is False:
+    #         prompt_name = "step3_finale"
+    #     else:
+    #         prompt_name = "step2_intermedio"
     if step_corrente == 1:
         prompt_name = "step1_identificazione"
+    
+    elif step_corrente >= MAX_FOTO:
+        # 🔒 SETTIMA FOTO → FORZA PROMPT FINALE
+        prompt_name = "step3_finale"
+    
     else:
         prev = db[foto_col].find_one(
             {"id_analisi": oid, "step": step_corrente - 1},
             {"_id": 0, "json_response": 1}
         )
         prev_json = prev.get("json_response") if isinstance(prev, dict) else None
-
+    
         if isinstance(prev_json, dict) and prev_json.get("richiedi_altra_foto") is False:
             prompt_name = "step3_finale"
         else:
             prompt_name = "step2_intermedio"
+
 
     base_prompt, meta_prompt = load_prompt_from_db(prompt_name, user_id)
     guardrail, _ = load_guardrail(user_id)
@@ -962,6 +993,12 @@ async def analizza_oggetto(input: InputAnalisi):
         {"$set": {"json_response": json_response_full}}
     )
 
+    # ======================================================
+    # 🔒 HARD STOP: se siamo all’ultima foto, chiudi comunque
+    # ======================================================
+    if step_corrente >= MAX_FOTO:
+        data["richiedi_altra_foto"] = False
+        data["note_backend"] = f"Giudizio finale forzato alla foto {step_corrente}"
 
     # =========================
     # 8) AGGIORNA STATO ANALISI
@@ -1566,6 +1603,7 @@ def root():
 
 
 # In[ ]:
+
 
 
 
