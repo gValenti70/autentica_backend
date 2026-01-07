@@ -3,7 +3,7 @@ import json
 import time
 import re
 from datetime import datetime, timezone
-from typing import Optional, Tuple, Any, Dict, List
+from typing import Optional, Tuple, Any, Dict, List, Literal
 from fastapi import FastAPI, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import HTTPException
@@ -18,6 +18,8 @@ import io
 import socket
 import uvicorn
 from pymongo import MongoClient
+from pymongo.errors import DuplicateKeyError
+from pymongo import ReturnDocument
 from bson import ObjectId
 import bcrypt
 import hashlib
@@ -1338,6 +1340,198 @@ def root():
         return {"status": "error", "error": str(e)}
 
 
+# ==========================
+# VADEMECUM CRUD - MODELS
+# ==========================
+class VademecumCreate(BaseModel):
+    type: str = "model"     # "model" | "brand_generic" | "general"
+    brand: str
+    model: str = ""         # per "general" può restare ""
+    raw_text: str
+
+class VademecumUpdate(BaseModel):
+    type: Optional[str] = None
+    brand: Optional[str] = None
+    model: Optional[str] = None
+    raw_text: Optional[str] = None
+
+def _norm(s: str) -> str:
+    return normalize(s or "")
+
+def _vademecum_out(doc: Dict[str, Any]) -> Dict[str, Any]:
+    return {
+        "id": str(doc["_id"]),
+        "type": doc.get("type"),
+        "brand": doc.get("brand"),
+        "brand_norm": doc.get("brand_norm"),
+        "model": doc.get("model"),
+        "model_norm": doc.get("model_norm"),
+        "raw_text": doc.get("raw_text", ""),
+        "created_at": safe_iso_datetime(doc.get("created_at")),
+        "updated_at": safe_iso_datetime(doc.get("updated_at")),
+    }
+
+def _duplicate_exists(col, *, type_: str, brand_norm: str, model_norm: str, exclude_id: Optional[ObjectId] = None) -> bool:
+    q = {"type": type_, "brand_norm": brand_norm, "model_norm": model_norm}
+    if exclude_id is not None:
+        q["_id"] = {"$ne": exclude_id}
+    return col.count_documents(q, limit=1) > 0
+
+
+# ==========================
+# VADEMECUM CRUD - ENDPOINTS
+# ==========================
+
+@app.get("/admin/vademecum")
+def admin_vademecum_list(
+    q: Optional[str] = Query(None),
+    type: Optional[str] = Query(None),
+    brand: Optional[str] = Query(None),
+    model: Optional[str] = Query(None),
+    limit: int = Query(100, ge=1, le=500),
+    skip: int = Query(0, ge=0),
+):
+    db = get_db()
+    col = db[vademecum_col]
+
+    match: Dict[str, Any] = {}
+
+    if type:
+        match["type"] = type.strip()
+
+    if brand:
+        match["brand_norm"] = _norm(brand)
+
+    if model is not None and model != "":
+        match["model_norm"] = _norm(model)
+
+    if q:
+        rx = {"$regex": q, "$options": "i"}
+        match["$or"] = [{"brand": rx}, {"model": rx}, {"raw_text": rx}, {"type": rx}]
+
+    rows = list(
+        col.find(match)
+           .sort([("brand_norm", 1), ("model_norm", 1)])
+           .skip(skip)
+           .limit(limit)
+    )
+
+    return {"count": col.count_documents(match), "items": [_vademecum_out(r) for r in rows]}
+
+
+@app.get("/admin/vademecum/{id}")
+def admin_vademecum_get(id: str):
+    db = get_db()
+    col = db[vademecum_col]
+
+    if not ObjectId.is_valid(id):
+        raise HTTPException(status_code=400, detail="ID non valido")
+
+    doc = col.find_one({"_id": ObjectId(id)})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Vademecum non trovato")
+
+    return _vademecum_out(doc)
+
+
+@app.post("/admin/vademecum")
+def admin_vademecum_create(payload: VademecumCreate):
+    db = get_db()
+    col = db[vademecum_col]
+
+    type_ = (payload.type or "model").strip()
+    brand = (payload.brand or "").strip()
+    model = (payload.model or "").strip()
+    raw_text = (payload.raw_text or "").strip()
+
+    if not brand:
+        raise HTTPException(status_code=400, detail="brand obbligatorio")
+    if not raw_text:
+        raise HTTPException(status_code=400, detail="raw_text obbligatorio")
+
+    brand_norm = _norm(brand)
+    model_norm = _norm(model)
+
+    if _duplicate_exists(col, type_=type_, brand_norm=brand_norm, model_norm=model_norm):
+        raise HTTPException(status_code=409, detail="Duplicato: stesso type/brand/model")
+
+    now = datetime.now(timezone.utc)
+    doc = {
+        "type": type_,
+        "brand": brand,
+        "brand_norm": brand_norm,
+        "model": model,
+        "model_norm": model_norm,
+        "raw_text": raw_text,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+    res = col.insert_one(doc)
+    doc["_id"] = res.inserted_id
+    return _vademecum_out(doc)
+
+
+@app.put("/admin/vademecum/{id}")
+def admin_vademecum_update(id: str, payload: VademecumUpdate):
+    db = get_db()
+    col = db[vademecum_col]
+
+    if not ObjectId.is_valid(id):
+        raise HTTPException(status_code=400, detail="ID non valido")
+    oid = ObjectId(id)
+
+    cur = col.find_one({"_id": oid})
+    if not cur:
+        raise HTTPException(status_code=404, detail="Vademecum non trovato")
+
+    type_ = (payload.type.strip() if isinstance(payload.type, str) and payload.type.strip() else cur.get("type", "model"))
+    brand = (payload.brand.strip() if isinstance(payload.brand, str) and payload.brand.strip() else cur.get("brand", ""))
+    model = (payload.model.strip() if isinstance(payload.model, str) else cur.get("model", ""))
+    raw_text = (payload.raw_text.strip() if isinstance(payload.raw_text, str) else cur.get("raw_text", ""))
+
+    if not brand:
+        raise HTTPException(status_code=400, detail="brand obbligatorio")
+    if not raw_text:
+        raise HTTPException(status_code=400, detail="raw_text obbligatorio")
+
+    brand_norm = _norm(brand)
+    model_norm = _norm(model)
+
+    if _duplicate_exists(col, type_=type_, brand_norm=brand_norm, model_norm=model_norm, exclude_id=oid):
+        raise HTTPException(status_code=409, detail="Duplicato: stesso type/brand/model")
+
+    upd = {
+        "type": type_,
+        "brand": brand,
+        "brand_norm": brand_norm,
+        "model": model,
+        "model_norm": model_norm,
+        "raw_text": raw_text,
+        "updated_at": datetime.now(timezone.utc),
+    }
+
+    col.update_one({"_id": oid}, {"$set": upd})
+    doc = col.find_one({"_id": oid})
+    return _vademecum_out(doc)
+
+
+@app.delete("/admin/vademecum/{id}")
+def admin_vademecum_delete(id: str):
+    db = get_db()
+    col = db[vademecum_col]
+
+    if not ObjectId.is_valid(id):
+        raise HTTPException(status_code=400, detail="ID non valido")
+
+    oid = ObjectId(id)
+    doc = col.find_one({"_id": oid})
+    if not doc:
+        raise HTTPException(status_code=404, detail="Vademecum non trovato")
+
+    col.delete_one({"_id": oid})
+    return {"status": "ok", "deleted_id": id}
+
 # In[ ]:
 
 
@@ -1603,6 +1797,7 @@ def root():
 
 
 # In[ ]:
+
 
 
 
