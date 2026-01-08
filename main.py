@@ -767,7 +767,36 @@ def api_prompt_history(prompt_name: str, user_id: str = "default"):
         raise HTTPException(404, "Nessuna versione trovata")
     return res
 
+@app.get("/prompt/list_active")
+def api_prompt_list_active(exclude_user_id: str | None = None, limit: int = 500):
+    db = get_db()
 
+    q = {"is_active": True}
+    if exclude_user_id:
+        q["user_id"] = {"$ne": exclude_user_id}
+
+    cur = (
+        db.aut_prompt_versions
+        .find(
+            q,
+            {
+                "_id": 0,
+                "prompt_name": 1,
+                "user_id": 1,
+                "version": 1,
+                "created_at": 1,
+                "updated_at": 1
+            }
+        )
+        # 👇 ORDINAMENTO DECENTE
+        .sort([
+            ("user_id", 1),        # A → Z utenti
+            ("prompt_name", 1)     # A → Z prompt
+        ])
+        .limit(int(limit))
+    )
+
+    return list(cur)
 # ======================================================
 # ENDPOINTS BACKEND
 # ======================================================
@@ -1797,6 +1826,7 @@ def admin_vademecum_delete(id: str):
 
 
 # In[ ]:
+
 
 
 
