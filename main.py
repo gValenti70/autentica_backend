@@ -804,7 +804,9 @@ def api_prompt_list_active(exclude_user_id: str | None = None, limit: int = 500)
 async def analizza_oggetto(input: InputAnalisi):
     db = get_db()
 
-    tipologia = (input.tipologia or "borsa").strip()
+    # ✅ tipologia: non forzare più "borsa" qui
+    tipologia_input = (input.tipologia or "").strip()
+
     user_id = (input.user_id or "default").strip()
 
     # =========================
@@ -828,6 +830,8 @@ async def analizza_oggetto(input: InputAnalisi):
             "user_id": user_id,
             "stato": "in_corso",
             "step_corrente": 0,
+            # ✅ aggiunto: tipologia salvata subito (fallback iniziale)
+            "tipologia": tipologia_input or "borsa",
             "marca_stimata": None,
             "modello_stimato": None,
             "percentuale_contraffazione": None,
@@ -877,47 +881,38 @@ async def analizza_oggetto(input: InputAnalisi):
     modello = (analisi or {}).get("modello_stimato")
 
     # =========================
+    # ✅ 2bis) Tipologia dal DB (se già determinata)
+    # =========================
+    tipologia_db = (analisi or {}).get("tipologia")
+    tipologia = (tipologia_db or tipologia_input or "borsa").strip()
+
+    # =========================
     # 3) Vademecum
     # =========================
     # vademecum_text, vmeta = load_vademecum(modello or "", marca)
     vademecum_text, vmeta = load_vademecum_mongo(modello or "", marca, db)
 
-
     # =========================
     # 4) Scelta prompt (finale SOLO se GPT ha detto basta)
     # =========================
-    # if step_corrente == 1:
-    #     prompt_name = "step1_identificazione"
-    # else:
-    #     prev = db[foto_col].find_one(
-    #         {"id_analisi": oid, "step": step_corrente - 1},
-    #         {"_id": 0, "json_response": 1}
-    #     )
-    #     prev_json = prev.get("json_response") if isinstance(prev, dict) else None
-
-    #     if isinstance(prev_json, dict) and prev_json.get("richiedi_altra_foto") is False:
-    #         prompt_name = "step3_finale"
-    #     else:
-    #         prompt_name = "step2_intermedio"
     if step_corrente == 1:
         prompt_name = "step1_identificazione"
-    
+
     elif step_corrente >= MAX_FOTO:
         # 🔒 SETTIMA FOTO → FORZA PROMPT FINALE
         prompt_name = "step3_finale"
-    
+
     else:
         prev = db[foto_col].find_one(
             {"id_analisi": oid, "step": step_corrente - 1},
             {"_id": 0, "json_response": 1}
         )
         prev_json = prev.get("json_response") if isinstance(prev, dict) else None
-    
+
         if isinstance(prev_json, dict) and prev_json.get("richiedi_altra_foto") is False:
             prompt_name = "step3_finale"
         else:
             prompt_name = "step2_intermedio"
-
 
     base_prompt, meta_prompt = load_prompt_from_db(prompt_name, user_id)
     guardrail, _ = load_guardrail(user_id)
@@ -927,7 +922,7 @@ async def analizza_oggetto(input: InputAnalisi):
     final_prompt = (
         base_prompt
         .replace("{{GUARDRAIL}}", guardrail)
-        .replace("{{TIPOLOGIA}}", tipologia)
+        .replace("{{TIPOLOGIA}}", tipologia)  # ✅ ora è quella “vera” (db > input > fallback)
         .replace("{{MODELLO}}", modello_safe)
         .replace("{{NUM_FOTO}}", str(num_foto))
         .replace("{{VADEMECUM}}", vademecum_text)
@@ -951,7 +946,7 @@ async def analizza_oggetto(input: InputAnalisi):
         messages=messages
     )
     t1 = time.time()
-    
+
     timing = {
         "tempo_chat_gpt_ms": round((t1 - t0) * 1000, 2)
     }
@@ -972,27 +967,35 @@ async def analizza_oggetto(input: InputAnalisi):
             "errore_raw": raw
         }
 
-   
     # =========================
-    # 6) Blocca marca/modello dopo step 1
+    # 6) Blocca marca/modello/tipologia dopo step 1
     # =========================
     if step_corrente == 1:
+        # ✅ prende tipologia da GPT se presente (supporta 2 chiavi), altrimenti fallback
+        tipologia_gpt = (data.get("tipologia_stimata") or data.get("tipologia") or "").strip()
+        tipologia_finale = tipologia_gpt or tipologia
+
         db[analisi_col].update_one(
             {"_id": oid},
             {"$set": {
                 "marca_stimata": data.get("marca_stimata"),
-                "modello_stimato": data.get("modello_stimato")
+                "modello_stimato": data.get("modello_stimato"),
+                "tipologia": tipologia_finale  # ✅ aggiunto
             }}
         )
+
+        # ✅ importantissimo: aggiorna anche la variabile locale subito
+        tipologia = tipologia_finale
+
         # 🔥 VADEMECUM — SOLO ORA HA SENSO
         vademecum_text = ""
         vmeta = {"found": False, "reason": "not_resolved"}
-        
+
         brand_raw = data.get("marca_stimata")
         model_raw = data.get("modello_stimato")
-        
+
         logger.info(f"[VADEMECUM CALL] brand='{brand_raw}' model='{model_raw}'")
-        
+
         if brand_raw and model_raw:
             vademecum_text, vmeta = load_vademecum_mongo(
                 model_raw,
@@ -1008,18 +1011,22 @@ async def analizza_oggetto(input: InputAnalisi):
         "id_analisi": str(oid),
         "step": step_corrente,
         "tot_foto": num_foto,
+
+        # ✅ aggiunto: tipologia stabile nel JSON
+        "tipologia": tipologia,
+
         "prompt_info": {
             "prompt_name": meta_prompt.get("prompt_name"),
             "prompt_version": meta_prompt.get("version"),
             "user_id": meta_prompt.get("user_id"),
-            "tipologia": tipologia,
+            "tipologia": tipologia,  # ✅ ora coerente
             "prompt_char_len": len(meta_prompt.get("content", "")),
         },
         "vademecum_info": vmeta,
-        "vademecum_text":vademecum_text,
+        "vademecum_text": vademecum_text,
         "timing": timing
     }
-    
+
     db[foto_col].update_one(
         {"id_analisi": oid, "step": step_corrente},
         {"$set": {"json_response": json_response_full}}
@@ -1036,7 +1043,7 @@ async def analizza_oggetto(input: InputAnalisi):
     # 8) AGGIORNA STATO ANALISI
     # =========================
     richiedi = data.get("richiedi_altra_foto")
-    
+
     if richiedi is False:
         # 🔒 STEP FINALE — scriviamo il riepilogo in aut_analisi
         db[analisi_col].update_one(
@@ -1059,7 +1066,6 @@ async def analizza_oggetto(input: InputAnalisi):
             }}
         )
 
-
     return json_safe(json_response_full)
 
 
@@ -1081,6 +1087,8 @@ def stato_analisi(id_analisi: str):
         "user_id": analisi.get("user_id"),
         "stato": analisi.get("stato"),
         "step_corrente": analisi.get("step_corrente"),
+        # ✅ aggiunto
+        "tipologia": analisi.get("tipologia"),
         "marca_stimata": analisi.get("marca_stimata"),
         "modello_stimato": analisi.get("modello_stimato"),
         "percentuale_contraffazione": analisi.get("percentuale_contraffazione"),
@@ -1120,7 +1128,6 @@ def stato_analisi(id_analisi: str):
         "foto": foto,
         "ultimo_json": ultimo_json
     }
-
 
 
 @app.get("/admin/analisi")
@@ -1179,6 +1186,8 @@ def admin_list_analisi(
             "user_id": r.get("user_id"),
             "stato": r.get("stato"),
             "step_corrente": r.get("step_corrente"),
+            # ✅ aggiunto
+            "tipologia": r.get("tipologia"),
             "marca_stimata": r.get("marca_stimata"),
             "modello_stimato": r.get("modello_stimato"),
             "percentuale_contraffazione": r.get("percentuale_contraffazione"),
@@ -1222,6 +1231,8 @@ def admin_analisi_dettaglio(id: str):
         "user_id": analisi.get("user_id"),
         "stato": analisi.get("stato"),
         "step_corrente": analisi.get("step_corrente"),
+        # ✅ aggiunto
+        "tipologia": analisi.get("tipologia"),
         "marca_stimata": analisi.get("marca_stimata"),
         "modello_stimato": analisi.get("modello_stimato"),
         "percentuale_contraffazione": analisi.get("percentuale_contraffazione"),
@@ -1244,6 +1255,7 @@ def admin_analisi_dettaglio(id: str):
         "analisi": analisi_out,
         "foto": foto_out
     }
+
 
 # ============================================
 # LOGIN
@@ -1827,6 +1839,7 @@ def admin_vademecum_delete(id: str):
 
 
 # In[ ]:
+
 
 
 
