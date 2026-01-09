@@ -1016,6 +1016,7 @@ async def analizza_oggetto(input: InputAnalisi):
             "prompt_char_len": len(meta_prompt.get("content", "")),
         },
         "vademecum_info": vmeta,
+        "vademecum_text":vademecum_text,
         "timing": timing
     }
     
@@ -1826,6 +1827,7 @@ def admin_vademecum_delete(id: str):
 
 
 # In[ ]:
+
 
 
 
