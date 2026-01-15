@@ -456,7 +456,12 @@ def load_vademecum_mongo(model: str, brand: str, db):
 
     vlog.info("[OUT] fallback_hardcoded")
     meta.update({"source": "fallback_hardcoded", "match_type": "hardcoded", "length_chars": None})
-    return "Controllare logo, cuciture, hardware, materiali, simmetria e seriale.", meta
+    return """Verificare con attenzione logo, cuciture, hardware, materiali, simmetria ed eventuali codici o seriali, 
+            ricercando attivamente discrepanze rispetto agli standard noti del brand. 
+            Anche imprecisioni lievi, incoerenze di allineamento, variazioni di qualità o finitura, 
+            o differenze nella resa dei dettagli devono essere considerate come potenziali segnali di non originalità 
+            e incidere sulla valutazione complessiva.
+    """, meta
 
 
 
@@ -1839,6 +1844,7 @@ def admin_vademecum_delete(id: str):
 
 
 # In[ ]:
+
 
 
 
