@@ -1875,3 +1875,4 @@ def admin_vademecum_delete(id: str):
 
 
 
+
