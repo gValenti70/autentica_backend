@@ -1138,7 +1138,9 @@ def stato_analisi(id_analisi: str):
 @app.get("/admin/analisi")
 def admin_list_analisi(
     search: Optional[str] = Query(None),
-    stato: Optional[str] = Query(None)
+    stato: Optional[str] = Query(None),
+    page: int = Query(1, ge=1),
+    page_size: int = Query(5, ge=1, le=200),
 ):
     db = get_db()
 
@@ -1149,15 +1151,30 @@ def admin_list_analisi(
 
     if search:
         regex = {"$regex": search, "$options": "i"}
-        match["$or"] = [
+        or_list = [
             {"user_id": regex},
             {"marca_stimata": regex},
             {"modello_stimato": regex},
-            {"_id": ObjectId(search)} if ObjectId.is_valid(search) else {"_id": None}
         ]
+        if ObjectId.is_valid(search):
+            or_list.append({"_id": ObjectId(search)})
+        match["$or"] = or_list
+
+    # ✅ totale VERO
+    total = db.aut_analisi.count_documents(match)
+    total_pages = max(1, ceil(total / page_size))
+
+    if page > total_pages:
+        page = total_pages
+
+    skip = (page - 1) * page_size
 
     pipeline = [
         {"$match": match},
+        {"$sort": {"created_at": -1}},
+        {"$skip": skip},
+        {"$limit": page_size},
+
         {
             "$lookup": {
                 "from": "aut_analisi_foto",
@@ -1169,29 +1186,21 @@ def admin_list_analisi(
         {
             "$addFields": {
                 "totale_foto": {"$size": "$foto"},
-                "last_step": {"$max": "$foto.step"}
+                "last_step": {"$ifNull": [{"$max": "$foto.step"}, 1]}
             }
         },
-        {
-            "$project": {
-                "foto": 0
-            }
-        },
-        {
-            "$sort": {"created_at": -1}
-        }
+        {"$project": {"foto": 0}}
     ]
 
     rows = list(db.aut_analisi.aggregate(pipeline))
 
-    out = []
+    items = []
     for r in rows:
-        out.append({
+        items.append({
             "id": str(r["_id"]),
             "user_id": r.get("user_id"),
             "stato": r.get("stato"),
             "step_corrente": r.get("step_corrente"),
-            # ✅ aggiunto
             "tipologia": r.get("tipologia"),
             "marca_stimata": r.get("marca_stimata"),
             "modello_stimato": r.get("modello_stimato"),
@@ -1201,7 +1210,14 @@ def admin_list_analisi(
             "created_at": safe_iso_datetime(r.get("created_at")) if r.get("created_at") else None
         })
 
-    return out
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": total_pages
+    }
+
 
 
 @app.get("/admin/analisi/{id}")
@@ -1844,6 +1860,7 @@ def admin_vademecum_delete(id: str):
 
 
 # In[ ]:
+
 
 
 
