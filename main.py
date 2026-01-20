@@ -75,9 +75,9 @@ def get_mongo_client() -> MongoClient:
         # DocumentDB Mongo compat: TLS obbligatorio, SRV ok
         _mongo_client = MongoClient(
             MONGO_URI,
-            serverSelectionTimeoutMS=8000,
-            connectTimeoutMS=8000,
-            socketTimeoutMS=20000,
+            socketTimeoutMS=120000,
+            connectTimeoutMS=20000,
+            serverSelectionTimeoutMS=20000,
             retryWrites=False
         )
     return _mongo_client
@@ -1862,6 +1862,7 @@ def admin_vademecum_delete(id: str):
 
 
 # In[ ]:
+
 
 
 
