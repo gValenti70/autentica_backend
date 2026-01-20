@@ -23,6 +23,8 @@ from pymongo import ReturnDocument
 from bson import ObjectId
 import bcrypt
 import hashlib
+from math import ceil
+
 
 # ======================================================
 # LOGGING
@@ -1860,6 +1862,7 @@ def admin_vademecum_delete(id: str):
 
 
 # In[ ]:
+
 
 
 
