@@ -25,7 +25,6 @@ import bcrypt
 import hashlib
 from math import ceil
 
-
 # ======================================================
 # LOGGING
 # ======================================================
@@ -242,20 +241,50 @@ def similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
-
+# ======================================================
+# VADEMECUM
+# ======================================================
 vlog = logging.getLogger("VADEMECUM")
 vlog.setLevel(logging.INFO)
 
-def load_vademecum_mongo(model: str, brand: str, db):
+# normalize(s: str) -> str
+# similarity(a: str, b: str) -> float   # 0..1
+
+BRAND_FUZZY_MIN = 0.85
+MODEL_FUZZY_MIN = 0.60
+GENERIC_MODEL_NORM = normalize("generico")
+
+
+def _tokenize_model(model_raw: str):
+    tokens = re.sub(r"[^a-zA-Z0-9\s]", " ", (model_raw or "").lower()).split()
+    tokens_norm = [normalize(t) for t in tokens if len(t) >= 2]
+    return tokens, tokens_norm
+
+
+def _pick_best_fuzzy(probe_norm: str, candidates_norm: list[str]) -> tuple[Optional[str], float]:
+    best_val = None
+    best_score = 0.0
+    for c in candidates_norm:
+        s = similarity(probe_norm, c)
+        if s > best_score:
+            best_score = s
+            best_val = c
+    return best_val, best_score
+
+
+def load_vademecum_mongo(model: str, brand: str, db) -> Tuple[str, Dict[str, Any]]:
     meta = {
+        "brand_requested": brand or "",
+        "brand_norm_requested": normalize(brand or ""),
         "model_requested": model or "",
-        "model_norm": normalize(model or ""),
-        "brand": brand,
-        "file": None,
-        "path": None,
-        "source": None,
-        "match_type": None,
-        "fuzzy_score": None,
+        "model_norm_requested": normalize(model or ""),
+        "resolved_brand_norm": None,
+        "resolved_model_norm": None,
+        "source": None,        # brand_exact / brand_fuzzy / model_exact / model_fuzzy / model_generic / openai / hardcoded
+        "match_type": None,    # brand_exact / brand_fuzzy / model_exact / model_fuzzy / model_generic / none
+        "fuzzy_score_brand": None,
+        "fuzzy_score_model": None,
+        "vademecum_id": None,
         "length_chars": None,
         "debug": {}
     }
@@ -268,202 +297,389 @@ def load_vademecum_mongo(model: str, brand: str, db):
 
     col = db["aut_vademecum"]
 
-    # ---- LOG INPUT
     vlog.info("========== VADEMECUM LOOKUP ==========")
     vlog.info(f"[IN ] brand_raw='{brand_raw}' model_raw='{model_raw}'")
     vlog.info(f"[NORM] brand_norm='{brand_norm}' model_norm='{model_norm}'")
 
-    # ---- sanity: ping DB + collection stats (light)
-    try:
-        # count_documents su filtro piccolo (brand) per capire se stai nel DB giusto
-        brand_count = col.count_documents({"brand_norm": brand_norm}) if brand_norm else None
-        total_models = col.count_documents({"type": "model"})
-        vlog.info(f"[DB ] total(type=model)={total_models} | brand_count={brand_count}")
-        meta["debug"]["total_models"] = total_models
-        meta["debug"]["brand_count"] = brand_count
-    except Exception as e:
-        vlog.error(f"[DB ] count_documents error: {e}")
-        meta["debug"]["count_error"] = str(e)
-
-    # ---- tokenizzazione (per debug e fallback)
-    tokens = re.sub(r"[^a-zA-Z0-9\s]", " ", model_raw.lower()).split()
-    tokens_norm = [normalize(t) for t in tokens if len(t) >= 2]
-
-    vlog.info(f"[TOK] tokens={tokens}")
-    vlog.info(f"[TOK] tokens_norm={tokens_norm}")
-
+    tokens, tokens_norm = _tokenize_model(model_raw)
     meta["debug"]["tokens"] = tokens
     meta["debug"]["tokens_norm"] = tokens_norm
 
     # ======================================================
-    # 1) Exact model (brand_norm + model_norm)
+    # A) RESOLVE BRAND (exact -> fuzzy >= 0.85)
     # ======================================================
-    if brand_norm and model_norm:
-        q1 = {"brand_norm": brand_norm, "model_norm": model_norm, "type": "model"}
-        vlog.info(f"[Q1 ] exact query={q1}")
+    resolved_brand_norm = None
 
-        try:
-            doc = col.find_one(q1, {"raw_text": 1, "brand_norm": 1, "model_norm": 1, "model": 1, "type": 1})
-        except Exception as e:
-            vlog.error(f"[Q1 ] find_one error: {e}")
-            doc = None
-            meta["debug"]["q1_error"] = str(e)
-
-        if doc:
-            vlog.info(f"[Q1 ] HIT doc.model_norm='{doc.get('model_norm')}' doc.model='{doc.get('model')}'")
+    # A1) exact brand
+    if brand_norm:
+        # Se hai doc brand dedicati: type="brand"
+        doc_brand = col.find_one(
+            {"type": "brand", "brand_norm": brand_norm},
+            {"brand_norm": 1, "raw_text": 0}
+        )
+        if doc_brand:
+            resolved_brand_norm = doc_brand.get("brand_norm")
+            meta.update({
+                "resolved_brand_norm": resolved_brand_norm,
+                "source": "brand_exact",
+                "match_type": "brand_exact",
+            })
+            vlog.info(f"[BRAND] exact HIT brand_norm='{resolved_brand_norm}'")
         else:
-            vlog.info("[Q1 ] MISS")
+            vlog.info("[BRAND] exact MISS")
 
+    # A2) fuzzy brand (solo se non trovato exact)
+    if not resolved_brand_norm and brand_norm:
+        # Preferibile: doc brand dedicati
+        brand_candidates = list(col.find({"type": "brand"}, {"brand_norm": 1}))
+        brand_norms = [b.get("brand_norm") for b in brand_candidates if b.get("brand_norm")]
+
+        # Fallback se non hai type=brand nel DB: estrai dai modelli
+        if not brand_norms:
+            brand_norms = col.distinct("brand_norm", {"type": "model"})
+
+        best_brand, best_score = _pick_best_fuzzy(brand_norm, [bn for bn in brand_norms if bn])
+
+        vlog.info(f"[BRAND] fuzzy best='{best_brand}' score={best_score:.3f} (min={BRAND_FUZZY_MIN})")
+        meta["debug"]["brand_fuzzy_best"] = best_brand
+        meta["debug"]["brand_fuzzy_score"] = round(best_score, 3)
+
+        if best_brand and best_score >= BRAND_FUZZY_MIN:
+            resolved_brand_norm = best_brand
+            meta.update({
+                "resolved_brand_norm": resolved_brand_norm,
+                "source": "brand_fuzzy",
+                "match_type": "brand_fuzzy",
+                "fuzzy_score_brand": round(best_score, 3)
+            })
+
+    # Se non risolvo il brand -> lascia decidere a OpenAI (nessun testo vademecum)
+    if not resolved_brand_norm:
+        vlog.info("[OUT] brand_not_resolved -> openai")
+        meta.update({
+            "source": "openai",
+            "match_type": "none",
+        })
+        return "", meta
+
+    # ======================================================
+    # B) RESOLVE MODEL (exact -> fuzzy) dentro il brand
+    # ======================================================
+    # B1) exact model
+    if model_norm:
+        q_model_exact = {"type": "model", "brand_norm": resolved_brand_norm, "model_norm": model_norm}
+        vlog.info(f"[MODEL] exact query={q_model_exact}")
+
+        doc = col.find_one(q_model_exact, {"raw_text": 1, "brand_norm": 1, "model_norm": 1, "model": 1, "type": 1})
         if doc and doc.get("raw_text"):
             text = doc["raw_text"]
             meta.update({
+                "resolved_model_norm": doc.get("model_norm"),
                 "source": "model_exact",
                 "match_type": "model_exact",
                 "vademecum_id": str(doc.get("_id")),
-                "length_chars": len(text)
+                "length_chars": len(text),
             })
-            meta["debug"]["q1_hit"] = True
+            vlog.info(f"[MODEL] exact HIT model_norm='{doc.get('model_norm')}'")
             return text, meta
+        vlog.info("[MODEL] exact MISS")
 
-    # ======================================================
-    # 1b) Exact token (brand_norm + token_norm)
-    # ======================================================
-    if brand_norm and tokens_norm:
-        vlog.info("[Q1b] trying exact token matches...")
-        for t in tokens_norm[:10]:  # limit log noise
-            q1b = {"brand_norm": brand_norm, "model_norm": t, "type": "model"}
-            try:
-                doc = col.find_one(q1b, {"raw_text": 1, "model_norm": 1, "model": 1})
-            except Exception as e:
-                vlog.error(f"[Q1b] find_one error on token='{t}': {e}")
-                continue
+    # B2) fuzzy model (solo se ho almeno qualcosa da provare)
+    if model_norm or tokens_norm:
+        q_candidates = {"type": "model", "brand_norm": resolved_brand_norm}
+        candidates = list(col.find(q_candidates, {"model_norm": 1, "raw_text": 1, "model": 1}))
+        meta["debug"]["model_candidates_count"] = len(candidates)
+        vlog.info(f"[MODEL] fuzzy candidates_count={len(candidates)}")
 
-            vlog.info(f"[Q1b] token='{t}' -> {'HIT' if doc else 'MISS'}")
-            if doc and doc.get("raw_text"):
-                text = doc["raw_text"]
-                meta.update({
-                    "source": "model_exact_token",
-                    "match_type": "model_exact",
-                    "vademecum_id": str(best.get("_id")),
-                    "length_chars": len(text)
-                })
-                meta["debug"]["q1b_token_hit"] = t
-                return text, meta
-
-    # ======================================================
-    # 2) Fuzzy model (within brand)
-    # ======================================================
-    if brand_norm and (model_norm or tokens_norm):
-        q2 = {"brand_norm": brand_norm, "type": "model"}
-        vlog.info(f"[Q2 ] loading candidates query={q2}")
-
-        try:
-            candidates = list(col.find(q2, {"model": 1, "model_norm": 1, "raw_text": 1}))
-            vlog.info(f"[Q2 ] candidates_count={len(candidates)}")
-            meta["debug"]["candidates_count"] = len(candidates)
-        except Exception as e:
-            vlog.error(f"[Q2 ] find error: {e}")
-            candidates = []
-            meta["debug"]["q2_error"] = str(e)
-
-        best = None
-        best_score = 0.0
-        best_token = None
-
-        # confronto sia su model_norm intero sia token
-        probes = [model_norm] if model_norm else []
+        probes = []
+        if model_norm:
+            probes.append(model_norm)
         probes += tokens_norm[:10]
 
+        best_doc = None
+        best_score = 0.0
+        best_probe = None
+
         for c in candidates:
-            c_norm = c.get("model_norm", "") or ""
+            c_norm = c.get("model_norm") or ""
+            if not c_norm:
+                continue
             for p in probes:
-                score = similarity(p, c_norm)
-                if score > best_score:
-                    best = c
-                    best_score = score
-                    best_token = p
+                s = similarity(p, c_norm)
+                if s > best_score:
+                    best_score = s
+                    best_doc = c
+                    best_probe = p
 
-        vlog.info(f"[Q2 ] best_score={best_score:.3f} best_token='{best_token}' best_candidate='{(best or {}).get('model_norm')}'")
+        vlog.info(f"[MODEL] fuzzy best_score={best_score:.3f} best_probe='{best_probe}' best_model_norm='{(best_doc or {}).get('model_norm')}' (min={MODEL_FUZZY_MIN})")
+        meta["debug"]["model_fuzzy_best_probe"] = best_probe
+        meta["debug"]["model_fuzzy_best_score"] = round(best_score, 3)
+        meta["debug"]["model_fuzzy_best_model_norm"] = (best_doc or {}).get("model_norm")
 
-        # if best and best_score >= 0.60 and best.get("raw_text"):
-        #     text = best["raw_text"]
-        #     meta.update({
-        #         "source": "model_fuzzy",
-        #         "match_type": "model_fuzzy",
-        #         "vademecum_id": str(doc.get("_id")),
-        #         "fuzzy_score": round(best_score, 3),
-        #         "length_chars": len(text)
-        #     })
-        #     meta["debug"]["q2_best_token"] = best_token
-        #     meta["debug"]["q2_best_model_norm"] = best.get("model_norm")
-        #     return text, meta
-        if best and best_score >= 0.60 and best.get("raw_text"):
-            text = best["raw_text"]
+        if best_doc and best_score >= MODEL_FUZZY_MIN and best_doc.get("raw_text"):
+            text = best_doc["raw_text"]
             meta.update({
+                "resolved_model_norm": best_doc.get("model_norm"),
                 "source": "model_fuzzy",
                 "match_type": "model_fuzzy",
-                "vademecum_id": str(doc.get("_id")),
-                "fuzzy_score": round(best_score, 3),
-                "length_chars": len(text)
+                "vademecum_id": str(best_doc.get("_id")),
+                "fuzzy_score_model": round(best_score, 3),
+                "length_chars": len(text),
             })
-            meta["debug"]["q2_best_token"] = best_token
-            meta["debug"]["q2_best_model_norm"] = best.get("model_norm")
             return text, meta
 
     # ======================================================
-    # 3) Brand generic
+    # C) MODEL GENERICO per brand
     # ======================================================
-    if brand_norm:
-        q3 = {"brand_norm": brand_norm, "type": "brand_generic"}
-        vlog.info(f"[Q3 ] brand_generic query={q3}")
-        try:
-            doc = col.find_one(q3, {"raw_text": 1})
-        except Exception as e:
-            vlog.error(f"[Q3 ] find_one error: {e}")
-            doc = None
-            meta["debug"]["q3_error"] = str(e)
+    q_generic = {"type": "model", "brand_norm": resolved_brand_norm, "model_norm": GENERIC_MODEL_NORM}
+    vlog.info(f"[GEN ] generic query={q_generic}")
 
-        if doc and doc.get("raw_text"):
-            text = doc["raw_text"]
-            meta.update({
-                "source": "brand_generic",
-                "match_type": "brand_generic",
-                "vademecum_id": str(doc.get("_id")),
-                "length_chars": len(text)
-            })
-            meta["debug"]["q3_hit"] = True
-            return text, meta
-
-    # ======================================================
-    # 4) General fallback
-    # ======================================================
-    q4 = {"type": "general"}
-    vlog.info(f"[Q4 ] general query={q4}")
-    try:
-        doc = col.find_one(q4, {"raw_text": 1})
-    except Exception as e:
-        vlog.error(f"[Q4 ] find_one error: {e}")
-        doc = None
-        meta["debug"]["q4_error"] = str(e)
-
+    doc = col.find_one(q_generic, {"raw_text": 1, "model_norm": 1})
     if doc and doc.get("raw_text"):
         text = doc["raw_text"]
         meta.update({
-            "source": "fallback_general",
-            "match_type": "general",
-            "length_chars": len(text)
+            "resolved_model_norm": doc.get("model_norm"),
+            "source": "model_generic",
+            "match_type": "model_generic",
+            "vademecum_id": str(doc.get("_id")),
+            "length_chars": len(text),
         })
-        meta["debug"]["q4_hit"] = True
         return text, meta
 
-    vlog.info("[OUT] fallback_hardcoded")
-    meta.update({"source": "fallback_hardcoded", "match_type": "hardcoded", "length_chars": None})
-    return """Verificare con attenzione logo, cuciture, hardware, materiali, simmetria ed eventuali codici o seriali, 
-            ricercando attivamente discrepanze rispetto agli standard noti del brand. 
-            Anche imprecisioni lievi, incoerenze di allineamento, variazioni di qualità o finitura, 
-            o differenze nella resa dei dettagli devono essere considerate come potenziali segnali di non originalità 
-            e incidere sulla valutazione complessiva.
-    """, meta
+    # ======================================================
+    # D) Nessun vademecum: lascia decidere OpenAI
+    # ======================================================
+    vlog.info("[OUT] no_model_no_generic -> openai")
+    meta.update({
+        "source": "openai",
+        "match_type": "none",
+    })
+    return "", meta
+
+
+
+
+# vlog = logging.getLogger("VADEMECUM")
+# vlog.setLevel(logging.INFO)
+
+# def load_vademecum_mongo(model: str, brand: str, db):
+#     meta = {
+#         "model_requested": model or "",
+#         "model_norm": normalize(model or ""),
+#         "brand": brand,
+#         "file": None,
+#         "path": None,
+#         "source": None,
+#         "match_type": None,
+#         "fuzzy_score": None,
+#         "length_chars": None,
+#         "debug": {}
+#     }
+
+#     brand_raw = brand or ""
+#     model_raw = model or ""
+
+#     brand_norm = normalize(brand_raw)
+#     model_norm = normalize(model_raw)
+
+#     col = db["aut_vademecum"]
+
+#     # ---- LOG INPUT
+#     vlog.info("========== VADEMECUM LOOKUP ==========")
+#     vlog.info(f"[IN ] brand_raw='{brand_raw}' model_raw='{model_raw}'")
+#     vlog.info(f"[NORM] brand_norm='{brand_norm}' model_norm='{model_norm}'")
+
+#     # ---- sanity: ping DB + collection stats (light)
+#     try:
+#         # count_documents su filtro piccolo (brand) per capire se stai nel DB giusto
+#         brand_count = col.count_documents({"brand_norm": brand_norm}) if brand_norm else None
+#         total_models = col.count_documents({"type": "model"})
+#         vlog.info(f"[DB ] total(type=model)={total_models} | brand_count={brand_count}")
+#         meta["debug"]["total_models"] = total_models
+#         meta["debug"]["brand_count"] = brand_count
+#     except Exception as e:
+#         vlog.error(f"[DB ] count_documents error: {e}")
+#         meta["debug"]["count_error"] = str(e)
+
+#     # ---- tokenizzazione (per debug e fallback)
+#     tokens = re.sub(r"[^a-zA-Z0-9\s]", " ", model_raw.lower()).split()
+#     tokens_norm = [normalize(t) for t in tokens if len(t) >= 2]
+
+#     vlog.info(f"[TOK] tokens={tokens}")
+#     vlog.info(f"[TOK] tokens_norm={tokens_norm}")
+
+#     meta["debug"]["tokens"] = tokens
+#     meta["debug"]["tokens_norm"] = tokens_norm
+
+#     # ======================================================
+#     # 1) Exact model (brand_norm + model_norm)
+#     # ======================================================
+#     if brand_norm and model_norm:
+#         q1 = {"brand_norm": brand_norm, "model_norm": model_norm, "type": "model"}
+#         vlog.info(f"[Q1 ] exact query={q1}")
+
+#         try:
+#             doc = col.find_one(q1, {"raw_text": 1, "brand_norm": 1, "model_norm": 1, "model": 1, "type": 1})
+#         except Exception as e:
+#             vlog.error(f"[Q1 ] find_one error: {e}")
+#             doc = None
+#             meta["debug"]["q1_error"] = str(e)
+
+#         if doc:
+#             vlog.info(f"[Q1 ] HIT doc.model_norm='{doc.get('model_norm')}' doc.model='{doc.get('model')}'")
+#         else:
+#             vlog.info("[Q1 ] MISS")
+
+#         if doc and doc.get("raw_text"):
+#             text = doc["raw_text"]
+#             meta.update({
+#                 "source": "model_exact",
+#                 "match_type": "model_exact",
+#                 "vademecum_id": str(doc.get("_id")),
+#                 "length_chars": len(text)
+#             })
+#             meta["debug"]["q1_hit"] = True
+#             return text, meta
+
+#     # ======================================================
+#     # 1b) Exact token (brand_norm + token_norm)
+#     # ======================================================
+#     if brand_norm and tokens_norm:
+#         vlog.info("[Q1b] trying exact token matches...")
+#         for t in tokens_norm[:10]:  # limit log noise
+#             q1b = {"brand_norm": brand_norm, "model_norm": t, "type": "model"}
+#             try:
+#                 doc = col.find_one(q1b, {"raw_text": 1, "model_norm": 1, "model": 1})
+#             except Exception as e:
+#                 vlog.error(f"[Q1b] find_one error on token='{t}': {e}")
+#                 continue
+
+#             vlog.info(f"[Q1b] token='{t}' -> {'HIT' if doc else 'MISS'}")
+#             if doc and doc.get("raw_text"):
+#                 text = doc["raw_text"]
+#                 meta.update({
+#                     "source": "model_exact_token",
+#                     "match_type": "model_exact",
+#                     "vademecum_id": str(best.get("_id")),
+#                     "length_chars": len(text)
+#                 })
+#                 meta["debug"]["q1b_token_hit"] = t
+#                 return text, meta
+
+#     # ======================================================
+#     # 2) Fuzzy model (within brand)
+#     # ======================================================
+#     if brand_norm and (model_norm or tokens_norm):
+#         q2 = {"brand_norm": brand_norm, "type": "model"}
+#         vlog.info(f"[Q2 ] loading candidates query={q2}")
+
+#         try:
+#             candidates = list(col.find(q2, {"model": 1, "model_norm": 1, "raw_text": 1}))
+#             vlog.info(f"[Q2 ] candidates_count={len(candidates)}")
+#             meta["debug"]["candidates_count"] = len(candidates)
+#         except Exception as e:
+#             vlog.error(f"[Q2 ] find error: {e}")
+#             candidates = []
+#             meta["debug"]["q2_error"] = str(e)
+
+#         best = None
+#         best_score = 0.0
+#         best_token = None
+
+#         # confronto sia su model_norm intero sia token
+#         probes = [model_norm] if model_norm else []
+#         probes += tokens_norm[:10]
+
+#         for c in candidates:
+#             c_norm = c.get("model_norm", "") or ""
+#             for p in probes:
+#                 score = similarity(p, c_norm)
+#                 if score > best_score:
+#                     best = c
+#                     best_score = score
+#                     best_token = p
+
+#         vlog.info(f"[Q2 ] best_score={best_score:.3f} best_token='{best_token}' best_candidate='{(best or {}).get('model_norm')}'")
+
+#         # if best and best_score >= 0.60 and best.get("raw_text"):
+#         #     text = best["raw_text"]
+#         #     meta.update({
+#         #         "source": "model_fuzzy",
+#         #         "match_type": "model_fuzzy",
+#         #         "vademecum_id": str(doc.get("_id")),
+#         #         "fuzzy_score": round(best_score, 3),
+#         #         "length_chars": len(text)
+#         #     })
+#         #     meta["debug"]["q2_best_token"] = best_token
+#         #     meta["debug"]["q2_best_model_norm"] = best.get("model_norm")
+#         #     return text, meta
+#         if best and best_score >= 0.60 and best.get("raw_text"):
+#             text = best["raw_text"]
+#             meta.update({
+#                 "source": "model_fuzzy",
+#                 "match_type": "model_fuzzy",
+#                 "vademecum_id": str(doc.get("_id")),
+#                 "fuzzy_score": round(best_score, 3),
+#                 "length_chars": len(text)
+#             })
+#             meta["debug"]["q2_best_token"] = best_token
+#             meta["debug"]["q2_best_model_norm"] = best.get("model_norm")
+#             return text, meta
+
+#     # ======================================================
+#     # 3) Brand generic
+#     # ======================================================
+#     if brand_norm:
+#         q3 = {"brand_norm": brand_norm, "type": "brand_generic"}
+#         vlog.info(f"[Q3 ] brand_generic query={q3}")
+#         try:
+#             doc = col.find_one(q3, {"raw_text": 1})
+#         except Exception as e:
+#             vlog.error(f"[Q3 ] find_one error: {e}")
+#             doc = None
+#             meta["debug"]["q3_error"] = str(e)
+
+#         if doc and doc.get("raw_text"):
+#             text = doc["raw_text"]
+#             meta.update({
+#                 "source": "brand_generic",
+#                 "match_type": "brand_generic",
+#                 "vademecum_id": str(doc.get("_id")),
+#                 "length_chars": len(text)
+#             })
+#             meta["debug"]["q3_hit"] = True
+#             return text, meta
+
+#     # ======================================================
+#     # 4) General fallback
+#     # ======================================================
+#     q4 = {"type": "general"}
+#     vlog.info(f"[Q4 ] general query={q4}")
+#     try:
+#         doc = col.find_one(q4, {"raw_text": 1})
+#     except Exception as e:
+#         vlog.error(f"[Q4 ] find_one error: {e}")
+#         doc = None
+#         meta["debug"]["q4_error"] = str(e)
+
+#     if doc and doc.get("raw_text"):
+#         text = doc["raw_text"]
+#         meta.update({
+#             "source": "fallback_general",
+#             "match_type": "general",
+#             "length_chars": len(text)
+#         })
+#         meta["debug"]["q4_hit"] = True
+#         return text, meta
+
+#     vlog.info("[OUT] fallback_hardcoded")
+#     meta.update({"source": "fallback_hardcoded", "match_type": "hardcoded", "length_chars": None})
+#     return """Verificare con attenzione logo, cuciture, hardware, materiali, simmetria ed eventuali codici o seriali, 
+#             ricercando attivamente discrepanze rispetto agli standard noti del brand. 
+#             Anche imprecisioni lievi, incoerenze di allineamento, variazioni di qualità o finitura, 
+#             o differenze nella resa dei dettagli devono essere considerate come potenziali segnali di non originalità 
+#             e incidere sulla valutazione complessiva.
+#     """, meta
 
 
 
@@ -1862,6 +2078,7 @@ def admin_vademecum_delete(id: str):
 
 
 # In[ ]:
+
 
 
 
