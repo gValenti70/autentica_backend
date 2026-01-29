@@ -241,10 +241,13 @@ def similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
-def invalido(x: str) -> bool:
-    return not x or x.lower() in {
+def invalido(x: str | None) -> bool:
+    if not x:
+        return True
+    return x.strip().lower() in {
         "non identificabile",
         "non determinabile",
+        "modello non determinabile",
         "sconosciuto",
         "unknown",
         "nd",
@@ -261,7 +264,6 @@ def sostanzialmente_diverso(a: str, b: str) -> bool:
 # # ======================================================
 # # VADEMECUM
 # # ======================================================
-
 
 
 vlog = logging.getLogger("VADEMECUM")
@@ -1009,12 +1011,17 @@ async def analizza_oggetto(input: InputAnalisi):
             update["modello_stimato"] = modello_new
     
     elif step_corrente == 2:
+    
+        # aggiorna MARCA se prima era invalida e ora no
+        if invalido(marca_db) and not invalido(marca_new):
+            update["marca_stimata"] = marca_new
+    
+        # aggiorna MODELLO solo se migliora davvero
         if (
             invalido(modello_db)
             and not invalido(modello_new)
             and sostanzialmente_diverso(modello_db or "", modello_new)
         ):
-            update["marca_stimata"] = marca_new
             update["modello_stimato"] = modello_new
     
     if step_corrente == 1:
@@ -1881,6 +1888,7 @@ def admin_vademecum_delete(id: str):
 
 
 # In[ ]:
+
 
 
 
