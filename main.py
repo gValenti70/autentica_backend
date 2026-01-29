@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 # ======================================================
 AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "https://autenticagpt.openai.azure.com/")
 AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
-AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2026-01-01")
+AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
 DEPLOYMENT_GPT = os.getenv("DEPLOYMENT_GPT", "gpt-5.1-chat")
 
 client_gpt = AzureOpenAI(
@@ -975,64 +975,64 @@ async def analizza_oggetto(input: InputAnalisi):
             "errore_raw": raw
         }
 
-
 	# =========================
-	# 6) Gestione marca/modello (revisione consentita a step 2)
+	# 6) Gestione marca/modello (step 1 + possibile revisione step 2)
 	# =========================
-
+	
 	marca_db = (analisi or {}).get("marca_stimata")
 	modello_db = (analisi or {}).get("modello_stimato")
-
+	
 	marca_new = (data.get("marca_stimata") or "").strip()
 	modello_new = (data.get("modello_stimato") or "").strip()
-
+	
 	def invalido(x: str) -> bool:
-		return not x or x.lower() in {
-			"non identificabile",
-			"non determinabile",
-			"sconosciuto",
-			"unknown",
-			"nd",
-			"n.d."
-		}
-
+	    return not x or x.lower() in {
+	        "non identificabile",
+	        "non determinabile",
+	        "sconosciuto",
+	        "unknown",
+	        "nd",
+	        "n.d."
+	    }
+	
 	def sostanzialmente_diverso(a: str, b: str) -> bool:
-		if not a or not b:
-			return True
-		return similarity(a.lower(), b.lower()) < 0.60
-
+	    if not a or not b:
+	        return True
+	    return similarity(a.lower(), b.lower()) < 0.60
+	
 	update = {}
-
-	# STEP 1 → prima scrittura sempre
+	
+	# STEP 1 → prima scrittura sempre consentita
 	if step_corrente == 1:
-		if marca_new:
-			update["marca_stimata"] = marca_new
-		if modello_new:
-			update["modello_stimato"] = modello_new
-
-	# STEP 2 → revisione SOLO se prima era inutile o sbagliata
+	    if marca_new:
+	        update["marca_stimata"] = marca_new
+	    if modello_new:
+	        update["modello_stimato"] = modello_new
+	
+	# STEP 2 → revisione consentita SOLO se prima era NON IDENTIFICABILE
 	elif step_corrente == 2:
-		if (
-			invalido(modello_db)
-			and not invalido(modello_new)
-			and sostanzialmente_diverso(modello_db or "", modello_new)
-		):
-			update["marca_stimata"] = marca_new
-			update["modello_stimato"] = modello_new
-
-	# tipologia: fissala solo allo step 1 (come già fai)
+	    if (
+	        invalido(modello_db)
+	        and not invalido(modello_new)
+	        and sostanzialmente_diverso(modello_db or "", modello_new)
+	    ):
+	        update["marca_stimata"] = marca_new
+	        update["modello_stimato"] = modello_new
+	
+	# tipologia: fissala solo allo step 1 (come già facevi)
 	if step_corrente == 1:
-		tipologia_gpt = (data.get("tipologia_stimata") or data.get("tipologia") or "").strip()
-		if tipologia_gpt:
-			update["tipologia"] = tipologia_gpt
-
+	    tipologia_gpt = (data.get("tipologia_stimata") or data.get("tipologia") or "").strip()
+	    if tipologia_gpt:
+	        update["tipologia"] = tipologia_gpt
+	
 	if update:
-		db[analisi_col].update_one(
-			{"_id": oid},
-			{"$set": update}
-		)
+	    db[analisi_col].update_one(
+	        {"_id": oid},
+	        {"$set": update}
+	    )
 
-
+		
+	
     # =========================
     # 7) COSTRUISCI JSON RESPONSE COMPLETO (come versione MySQL)
     # =========================
@@ -1620,271 +1620,6 @@ def admin_vademecum_delete(id: str):
     col.delete_one({"_id": oid})
     return {"status": "ok", "deleted_id": id}
 
-# In[ ]:
-
-
-# # ======================================================
-# # MAIN SERVER
-# # ======================================================
-# if __name__ == "__main__":
-#     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
-#     server = uvicorn.Server(config)
-#     await server.serve()
-
-
-# In[ ]:
-
-
-# import os
-# import mysql.connector
-# from pymongo import MongoClient
-# from datetime import datetime
-# import json
-
-# # ======================================================
-# # MYSQL (come da tuo backend)
-# # ======================================================
-# def get_mysql_connection():
-#     return mysql.connector.connect(
-#         host="127.0.0.1",
-#         user="root",
-#         password="",
-#         database="autentica",
-#         use_pure=True
-#     )
-
-# # ======================================================
-# # MONGO
-# # ======================================================
-# MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://appl_tssanita:appl_tssanita@svi02-mngdb-svil.sogei.it/appl_tssanita?tls=false")
-# MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "tssanita")
-
-
-# mongo = MongoClient(MONGO_URI)
-# db = mongo[MONGO_DB_NAME]
-
-# # ======================================================
-# # MYSQL CONNECT
-# # ======================================================
-# mysql = get_mysql_connection()
-# cur = mysql.cursor(dictionary=True)
-
-# # ======================================================
-# # 1️⃣ MIGRAZIONE ANALISI
-# # ======================================================
-# print("▶ Migrating analisi...")
-# analisi_map = {}  # legacy_id (MySQL) -> ObjectId (Mongo)
-
-# cur.execute("SELECT * FROM analisi")
-# for row in cur.fetchall():
-#     doc = {
-#         "legacy_id": row["id"],
-#         "user_id": row["user_id"],
-#         "stato": row["stato"],
-#         "step_corrente": row["step_corrente"],
-#         "marca_stimata": row["marca_stimata"],
-#         "modello_stimato": row["modello_stimato"],
-#         "percentuale_contraffazione": row["percentuale_contraffazione"],
-#         "giudizio_finale": row["giudizio_finale"],
-#         "created_at": row.get("created_at", datetime.utcnow())
-#     }
-#     res = db.aut_analisi.insert_one(doc)
-#     analisi_map[row["id"]] = res.inserted_id
-
-# print("✔ analisi migrate")
-
-# # ======================================================
-# # 2️⃣ MIGRAZIONE ANALISI_FOTO
-# # ======================================================
-# print("▶ Migrating analisi_foto...")
-
-# cur.execute("SELECT * FROM analisi_foto ORDER BY id_analisi, step")
-# for row in cur.fetchall():
-#     doc = {
-#         "analisi_id": analisi_map[row["id_analisi"]],
-#         "legacy_id_analisi": row["id_analisi"],
-#         "step": row["step"],
-#         "foto_base64": row["foto_base64"],
-#         "json_response": json.loads(row["json_response"]) if row["json_response"] else None,
-#         "created_at": row.get("created_at", datetime.utcnow())
-#     }
-#     db.aut_analisi_foto.insert_one(doc)
-
-# print("✔ analisi_foto migrate")
-
-# # ======================================================
-# # 3️⃣ MIGRAZIONE PROMPTS
-# # ======================================================
-# print("▶ Migrating prompts...")
-
-# cur.execute("SELECT * FROM prompts")
-# for row in cur.fetchall():
-#     db.aut_prompts.insert_one({
-#         "legacy_id": row["id"],
-#         "name": row["name"],
-#         "created_at": row["created_at"]
-#     })
-
-# print("✔ prompts migrate")
-
-# # ======================================================
-# # 4️⃣ MIGRAZIONE PROMPT_VERSIONS
-# # ======================================================
-# print("▶ Migrating prompt_versions...")
-
-# cur.execute("SELECT * FROM prompt_versions")
-# for row in cur.fetchall():
-#     db.aut_prompt_versions.insert_one({
-#         "prompt_name": row["prompt_name"],
-#         "user_id": row["user_id"],
-#         "version": row["version"],
-#         "content": row["content"],
-#         "is_active": bool(row["is_active"]),
-#         "created_at": row["created_at"]
-#     })
-
-# print("✔ prompt_versions migrate")
-
-# # ======================================================
-# # CLEANUP
-# # ======================================================
-# cur.close()
-# mysql.close()
-# mongo.close()
-
-# print("\n✅ MIGRAZIONE COMPLETATA CON SUCCESSO")
-
-
-# In[ ]:
-
-
-# import mysql.connector
-# from pymongo import MongoClient
-# from datetime import datetime, timezone
-# import os
-# # ===============================
-# # MYSQL CONFIG
-# # ===============================
-# # MYSQL (come da tuo backend)
-# # ======================================================
-# def get_mysql_connection():
-#     return mysql.connector.connect(
-#         host="127.0.0.1",
-#         user="root",
-#         password="",
-#         database="aigov",
-#         use_pure=True
-#     )
-
-# MYSQL_TABLE = "anagrafica_personale"
-
-# # ===============================
-# # MONGO CONFIG
-# # ===============================
-# MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://appl_tssanita:appl_tssanita@svi02-mngdb-svil.sogei.it/appl_tssanita?tls=false")
-# MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "tssanita")
-# MONGO_COLLECTION = "aut_users"
-
-
-# def resolve_role(row: dict) -> str:
-#     """
-#     Determina il ruolo in modo coerente
-#     """
-#     if row.get("qualifica"):
-#         return row["qualifica"]
-
-#     if row.get("admin") == 1:
-#         return "admin"
-#     if row.get("viewer") == 1:
-#         return "viewer"
-#     if row.get("member") == 1:
-#         return "member"
-
-#     return "external"
-
-
-# def main():
-#     print("🔄 Migrazione utenti da MySQL → MongoDB")
-
-#     # MYSQL
-#     mysql = get_mysql_connection()
-#     cur = mysql.cursor(dictionary=True)
-
-#     cur.execute(f"SELECT * FROM {MYSQL_TABLE}")
-#     rows = cur.fetchall()
-
-#     if not rows:
-#         print("⚠️ Nessun utente trovato")
-#         return
-
-#     # MONGO
-#     mongo = MongoClient(MONGO_URI)
-#     db = mongo[MONGO_DB_NAME]
-#     col = db[MONGO_COLLECTION]
-
-#     migrated = 0
-#     skipped = 0
-
-#     for r in rows:
-#         user_id = r.get("userid")
-
-#         if not user_id:
-#             skipped += 1
-#             continue
-
-#         # evita duplicati
-#         if col.find_one({"user_id": user_id}):
-#             print(f"⚠️ già presente: {user_id}")
-#             skipped += 1
-#             continue
-
-#         password_hash = r.get("password")
-#         if not password_hash:
-#             print(f"⛔ password mancante per {user_id}")
-#             skipped += 1
-#             continue
-
-#         doc = {
-#             "user_id": user_id,
-#             "password_hash": password_hash,  # già hashata
-#             "is_active": bool(r.get("fl_attivo", 1)),
-#             "role": resolve_role(r),
-
-#             "profile": {
-#                 "nome": r.get("nome"),
-#                 "cognome": r.get("cognome")
-#             },
-
-#             "email": r.get("email"),
-#             "phone": r.get("phone"),
-#             "home": r.get("home"),
-
-#             "must_reset_password": bool(r.get("reset_password", 1)),
-
-#             "created_at": datetime.now(timezone.utc),
-#             "source": "mysql_anagrafica_personale"
-#         }
-
-#         col.insert_one(doc)
-#         migrated += 1
-#         print(f"✅ migrato: {user_id}")
-
-#     print("\n===============================")
-#     print("✔️ MIGRAZIONE COMPLETATA")
-#     print(f"   Migrati : {migrated}")
-#     print(f"   Saltati : {skipped}")
-#     print("===============================")
-
-#     cur.close()
-#     mysql.close()
-#     mongo.close()
-
-
-# if __name__ == "__main__":
-#     main()
-
-
-# In[ ]:
 
 
 
