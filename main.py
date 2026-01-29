@@ -1054,6 +1054,7 @@ async def analizza_oggetto(input: InputAnalisi):
             "tipologia": tipologia_input or "borsa",
             "marca_stimata": None,
             "modello_stimato": None,
+            "identificazione_completata": False,   # 👈 AGGIUNTO
             "percentuale_contraffazione": None,
             "giudizio_finale": None,
             "created_at": datetime.now(timezone.utc)
@@ -1109,8 +1110,19 @@ async def analizza_oggetto(input: InputAnalisi):
     # =========================
     # 3) Vademecum
     # =========================
-    # vademecum_text, vmeta = load_vademecum(modello or "", marca)
-    vademecum_text, vmeta = load_vademecum_mongo(modello or "", marca, db)
+
+    # vademecum_text, vmeta = load_vademecum_mongo(modello or "", marca, db)
+    vademecum_text = ""
+    vmeta = {"found": False, "reason": "identification_not_ready"}
+    
+    if analisi.get("identificazione_completata") is True:
+        vademecum_text, vmeta = load_vademecum_mongo(
+            analisi.get("modello_stimato") or "",
+            analisi.get("marca_stimata") or "",
+            db
+        )
+
+    
 
     # =========================
     # 4) Scelta prompt (finale SOLO se GPT ha detto basta)
@@ -1177,6 +1189,18 @@ async def analizza_oggetto(input: InputAnalisi):
 
     try:
         data = json.loads(raw)
+        # 🔓 Sblocca identificazione anche dopo lo step 1
+        if analisi.get("identificazione_completata") is False:
+            if data.get("identificazione_completa") is True:
+                db[analisi_col].update_one(
+                    {"_id": oid},
+                    {"$set": {
+                        "marca_stimata": data.get("marca_stimata"),
+                        "modello_stimato": data.get("modello_stimato"),
+                        "identificazione_completata": True
+                    }}
+                )
+
         if not isinstance(data, dict):
             raise ValueError("JSON non è un oggetto")
     except Exception:
@@ -1190,19 +1214,35 @@ async def analizza_oggetto(input: InputAnalisi):
     # =========================
     # 6) Blocca marca/modello/tipologia dopo step 1
     # =========================
+    # if step_corrente == 1:
+    #     # ✅ prende tipologia da GPT se presente (supporta 2 chiavi), altrimenti fallback
+    #     tipologia_gpt = (data.get("tipologia_stimata") or data.get("tipologia") or "").strip()
+    #     tipologia_finale = tipologia_gpt or tipologia
+
+    #     db[analisi_col].update_one(
+    #         {"_id": oid},
+    #         {"$set": {
+    #             "marca_stimata": data.get("marca_stimata"),
+    #             "modello_stimato": data.get("modello_stimato"),
+    #             "tipologia": tipologia_finale  # ✅ aggiunto
+    #         }}
+    #     )
     if step_corrente == 1:
-        # ✅ prende tipologia da GPT se presente (supporta 2 chiavi), altrimenti fallback
         tipologia_gpt = (data.get("tipologia_stimata") or data.get("tipologia") or "").strip()
         tipologia_finale = tipologia_gpt or tipologia
-
+    
+        identificazione_ok = data.get("identificazione_completa") is True  # 👈 AGGIUNTA
+    
         db[analisi_col].update_one(
             {"_id": oid},
             {"$set": {
                 "marca_stimata": data.get("marca_stimata"),
                 "modello_stimato": data.get("modello_stimato"),
-                "tipologia": tipologia_finale  # ✅ aggiunto
+                "identificazione_completata": identificazione_ok,  # 👈 AGGIUNTA
+                "tipologia": tipologia_finale
             }}
         )
+
 
         # ✅ importantissimo: aggiorna anche la variabile locale subito
         tipologia = tipologia_finale
@@ -2075,6 +2115,7 @@ def admin_vademecum_delete(id: str):
 
 
 # In[ ]:
+
 
 
 
