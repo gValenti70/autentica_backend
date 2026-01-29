@@ -978,60 +978,59 @@ async def analizza_oggetto(input: InputAnalisi):
 	# =========================
 	# 6) Gestione marca/modello (step 1 + possibile revisione step 2)
 	# =========================
-	
+
 	marca_db = (analisi or {}).get("marca_stimata")
 	modello_db = (analisi or {}).get("modello_stimato")
-	
+
 	marca_new = (data.get("marca_stimata") or "").strip()
 	modello_new = (data.get("modello_stimato") or "").strip()
-	
+
 	def invalido(x: str) -> bool:
-	    return not x or x.lower() in {
-	        "non identificabile",
-	        "non determinabile",
-	        "sconosciuto",
-	        "unknown",
-	        "nd",
-	        "n.d."
-	    }
-	
+		return not x or x.lower() in {
+			"non identificabile",
+			"non determinabile",
+			"sconosciuto",
+			"unknown",
+			"nd",
+			"n.d."
+		}
+
 	def sostanzialmente_diverso(a: str, b: str) -> bool:
-	    if not a or not b:
-	        return True
-	    return similarity(a.lower(), b.lower()) < 0.60
-	
+		if not a or not b:
+			return True
+		return similarity(a.lower(), b.lower()) < 0.60
+
 	update = {}
-	
+
 	# STEP 1 → prima scrittura sempre consentita
 	if step_corrente == 1:
-	    if marca_new:
-	        update["marca_stimata"] = marca_new
-	    if modello_new:
-	        update["modello_stimato"] = modello_new
-	
+		if marca_new:
+			update["marca_stimata"] = marca_new
+		if modello_new:
+			update["modello_stimato"] = modello_new
+
 	# STEP 2 → revisione consentita SOLO se prima era NON IDENTIFICABILE
 	elif step_corrente == 2:
-	    if (
-	        invalido(modello_db)
-	        and not invalido(modello_new)
-	        and sostanzialmente_diverso(modello_db or "", modello_new)
-	    ):
-	        update["marca_stimata"] = marca_new
-	        update["modello_stimato"] = modello_new
-	
-	# tipologia: fissala solo allo step 1 (come già facevi)
-	if step_corrente == 1:
-	    tipologia_gpt = (data.get("tipologia_stimata") or data.get("tipologia") or "").strip()
-	    if tipologia_gpt:
-	        update["tipologia"] = tipologia_gpt
-	
-	if update:
-	    db[analisi_col].update_one(
-	        {"_id": oid},
-	        {"$set": update}
-	    )
+		if (
+			invalido(modello_db)
+			and not invalido(modello_new)
+			and sostanzialmente_diverso(modello_db or "", modello_new)
+		):
+			update["marca_stimata"] = marca_new
+			update["modello_stimato"] = modello_new
 
-		
+	# tipologia: fissala solo allo step 1
+	if step_corrente == 1:
+		tipologia_gpt = (data.get("tipologia_stimata") or data.get("tipologia") or "").strip()
+		if tipologia_gpt:
+			update["tipologia"] = tipologia_gpt
+
+	if update:
+		db[analisi_col].update_one(
+			{"_id": oid},
+			{"$set": update}
+		)
+
 	
     # =========================
     # 7) COSTRUISCI JSON RESPONSE COMPLETO (come versione MySQL)
@@ -1619,6 +1618,7 @@ def admin_vademecum_delete(id: str):
 
     col.delete_one({"_id": oid})
     return {"status": "ok", "deleted_id": id}
+
 
 
 
