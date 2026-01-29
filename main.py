@@ -241,13 +241,11 @@ def similarity(a: str, b: str) -> float:
     return SequenceMatcher(None, a, b).ratio()
 
 
-def invalido(x: str | None) -> bool:
-    if not x:
-        return True
-    return x.strip().lower() in {
+
+def invalido(x: str) -> bool:
+    return not x or x.lower() in {
         "non identificabile",
         "non determinabile",
-        "modello non determinabile",
         "sconosciuto",
         "unknown",
         "nd",
@@ -258,7 +256,6 @@ def sostanzialmente_diverso(a: str, b: str) -> bool:
     if not a or not b:
         return True
     return similarity(a.lower(), b.lower()) < 0.60
-
 
 
 # # ======================================================
@@ -1001,38 +998,67 @@ async def analizza_oggetto(input: InputAnalisi):
     
     marca_new = (data.get("marca_stimata") or "").strip()
     modello_new = (data.get("modello_stimato") or "").strip()
-    
+        
     update = {}
+    rifai_vademecum = False
     
+        
+    # -------------------------
+    # STEP 1 → salva sempre
+    # -------------------------
     if step_corrente == 1:
         if marca_new:
             update["marca_stimata"] = marca_new
         if modello_new:
             update["modello_stimato"] = modello_new
     
+    # -------------------------
+    # STEP 2 → OVERRIDE FORTE
+    # -------------------------
     elif step_corrente == 2:
+        cambio_marca = (
+            not invalido(marca_new)
+            and sostanzialmente_diverso(marca_db or "", marca_new)
+        )
     
-        # aggiorna MARCA se prima era invalida e ora no
-        if invalido(marca_db) and not invalido(marca_new):
-            update["marca_stimata"] = marca_new
-    
-        # aggiorna MODELLO solo se migliora davvero
-        if (
-            invalido(modello_db)
-            and not invalido(modello_new)
+        cambio_modello = (
+            not invalido(modello_new)
             and sostanzialmente_diverso(modello_db or "", modello_new)
-        ):
-            update["modello_stimato"] = modello_new
+        )
     
+        if cambio_marca or cambio_modello:
+            update["marca_stimata"] = marca_new
+            update["modello_stimato"] = modello_new
+            rifai_vademecum = True
+    
+    # -------------------------
+    # Tipologia → SOLO step 1
+    # -------------------------
     if step_corrente == 1:
         tipologia_gpt = (data.get("tipologia_stimata") or data.get("tipologia") or "").strip()
         if tipologia_gpt:
             update["tipologia"] = tipologia_gpt
     
+    # -------------------------
+    # Scrittura DB
+    # -------------------------
     if update:
         db[analisi_col].update_one(
             {"_id": oid},
             {"$set": update}
+        )
+    
+    # -------------------------
+    # Rifai vademecum se override
+    # -------------------------
+    if rifai_vademecum:
+        logger.info(
+            f"[VADEMECUM OVERRIDE] nuova marca='{marca_new}' nuovo modello='{modello_new}'"
+        )
+        vademecum_text, vmeta = load_vademecum_mongo(
+            modello_new,
+            marca_new,
+            db
         )
 
 
@@ -1888,6 +1914,7 @@ def admin_vademecum_delete(id: str):
 
 
 # In[ ]:
+
 
 
 
