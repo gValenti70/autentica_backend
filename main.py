@@ -1233,14 +1233,19 @@ async def analizza_oggetto(input: InputAnalisi):
     
         identificazione_ok = data.get("identificazione_completa") is True  # 👈 AGGIUNTA
     
+        update_fields = {
+            "tipologia": tipologia_finale,
+            "identificazione_completata": identificazione_ok
+        }
+        
+        # salva marca/modello SOLO se affidabili
+        if identificazione_ok:
+            update_fields["marca_stimata"] = data.get("marca_stimata")
+            update_fields["modello_stimato"] = data.get("modello_stimato")
+        
         db[analisi_col].update_one(
             {"_id": oid},
-            {"$set": {
-                "marca_stimata": data.get("marca_stimata"),
-                "modello_stimato": data.get("modello_stimato"),
-                "identificazione_completata": identificazione_ok,  # 👈 AGGIUNTA
-                "tipologia": tipologia_finale
-            }}
+            {"$set": update_fields}
         )
 
 
@@ -2115,6 +2120,7 @@ def admin_vademecum_delete(id: str):
 
 
 # In[ ]:
+
 
 
 
