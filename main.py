@@ -464,6 +464,218 @@ def load_vademecum_mongo(model: str, brand: str, db):
     return "", meta
 
 
+# vlog = logging.getLogger("VADEMECUM")
+# vlog.setLevel(logging.INFO)
+
+# # normalize(s: str) -> str
+# # similarity(a: str, b: str) -> float   # 0..1
+
+# BRAND_FUZZY_MIN = 0.85
+# MODEL_FUZZY_MIN = 0.60
+# GENERIC_MODEL_NORM = normalize("generico")
+
+
+# def _tokenize_model(model_raw: str):
+#     tokens = re.sub(r"[^a-zA-Z0-9\s]", " ", (model_raw or "").lower()).split()
+#     tokens_norm = [normalize(t) for t in tokens if len(t) >= 2]
+#     return tokens, tokens_norm
+
+
+# def _pick_best_fuzzy(probe_norm: str, candidates_norm: list[str]) -> tuple[Optional[str], float]:
+#     best_val = None
+#     best_score = 0.0
+#     for c in candidates_norm:
+#         s = similarity(probe_norm, c)
+#         if s > best_score:
+#             best_score = s
+#             best_val = c
+#     return best_val, best_score
+
+
+# def load_vademecum_mongo(model: str, brand: str, db) -> Tuple[str, Dict[str, Any]]:
+#     meta = {
+#         "brand_requested": brand or "",
+#         "brand_norm_requested": normalize(brand or ""),
+#         "model_requested": model or "",
+#         "model_norm_requested": normalize(model or ""),
+#         "resolved_brand_norm": None,
+#         "resolved_model_norm": None,
+#         "source": None,        # brand_exact / brand_fuzzy / model_exact / model_fuzzy / model_generic / openai / hardcoded
+#         "match_type": None,    # brand_exact / brand_fuzzy / model_exact / model_fuzzy / model_generic / none
+#         "fuzzy_score_brand": None,
+#         "fuzzy_score_model": None,
+#         "vademecum_id": None,
+#         "length_chars": None,
+#         "debug": {}
+#     }
+
+#     brand_raw = brand or ""
+#     model_raw = model or ""
+
+#     brand_norm = normalize(brand_raw)
+#     model_norm = normalize(model_raw)
+
+#     col = db["aut_vademecum"]
+
+#     vlog.info("========== VADEMECUM LOOKUP ==========")
+#     vlog.info(f"[IN ] brand_raw='{brand_raw}' model_raw='{model_raw}'")
+#     vlog.info(f"[NORM] brand_norm='{brand_norm}' model_norm='{model_norm}'")
+
+#     tokens, tokens_norm = _tokenize_model(model_raw)
+#     meta["debug"]["tokens"] = tokens
+#     meta["debug"]["tokens_norm"] = tokens_norm
+
+#     # ======================================================
+#     # A) RESOLVE BRAND (exact -> fuzzy >= 0.85)
+#     # ======================================================
+#     resolved_brand_norm = None
+
+#     # A1) exact brand
+#     if brand_norm:
+#         # Se hai doc brand dedicati: type="brand"
+#         doc_brand = col.find_one(
+#             {"type": "brand", "brand_norm": brand_norm},
+#             {"brand_norm": 1, "raw_text": 0}
+#         )
+#         if doc_brand:
+#             resolved_brand_norm = doc_brand.get("brand_norm")
+#             meta.update({
+#                 "resolved_brand_norm": resolved_brand_norm,
+#                 "source": "brand_exact",
+#                 "match_type": "brand_exact",
+#             })
+#             vlog.info(f"[BRAND] exact HIT brand_norm='{resolved_brand_norm}'")
+#         else:
+#             vlog.info("[BRAND] exact MISS")
+
+#     # A2) fuzzy brand (solo se non trovato exact)
+#     if not resolved_brand_norm and brand_norm:
+#         # Preferibile: doc brand dedicati
+#         brand_candidates = list(col.find({"type": "brand"}, {"brand_norm": 1}))
+#         brand_norms = [b.get("brand_norm") for b in brand_candidates if b.get("brand_norm")]
+
+#         # Fallback se non hai type=brand nel DB: estrai dai modelli
+#         if not brand_norms:
+#             brand_norms = col.distinct("brand_norm", {"type": "model"})
+
+#         best_brand, best_score = _pick_best_fuzzy(brand_norm, [bn for bn in brand_norms if bn])
+
+#         vlog.info(f"[BRAND] fuzzy best='{best_brand}' score={best_score:.3f} (min={BRAND_FUZZY_MIN})")
+#         meta["debug"]["brand_fuzzy_best"] = best_brand
+#         meta["debug"]["brand_fuzzy_score"] = round(best_score, 3)
+
+#         if best_brand and best_score >= BRAND_FUZZY_MIN:
+#             resolved_brand_norm = best_brand
+#             meta.update({
+#                 "resolved_brand_norm": resolved_brand_norm,
+#                 "source": "brand_fuzzy",
+#                 "match_type": "brand_fuzzy",
+#                 "fuzzy_score_brand": round(best_score, 3)
+#             })
+
+#     # Se non risolvo il brand -> lascia decidere a OpenAI (nessun testo vademecum)
+#     if not resolved_brand_norm:
+#         vlog.info("[OUT] brand_not_resolved -> openai")
+#         meta.update({
+#             "source": "openai",
+#             "match_type": "none",
+#         })
+#         return "", meta
+
+#     # ======================================================
+#     # B) RESOLVE MODEL (exact -> fuzzy) dentro il brand
+#     # ======================================================
+#     # B1) exact model
+#     if model_norm:
+#         q_model_exact = {"type": "model", "brand_norm": resolved_brand_norm, "model_norm": model_norm}
+#         vlog.info(f"[MODEL] exact query={q_model_exact}")
+
+#         doc = col.find_one(q_model_exact, {"raw_text": 1, "brand_norm": 1, "model_norm": 1, "model": 1, "type": 1})
+#         if doc and doc.get("raw_text"):
+#             text = doc["raw_text"]
+#             meta.update({
+#                 "resolved_model_norm": doc.get("model_norm"),
+#                 "source": "model_exact",
+#                 "match_type": "model_exact",
+#                 "vademecum_id": str(doc.get("_id")),
+#                 "length_chars": len(text),
+#             })
+#             vlog.info(f"[MODEL] exact HIT model_norm='{doc.get('model_norm')}'")
+#             return text, meta
+#         vlog.info("[MODEL] exact MISS")
+
+#     # B2) fuzzy model (solo se ho almeno qualcosa da provare)
+#     if model_norm or tokens_norm:
+#         q_candidates = {"type": "model", "brand_norm": resolved_brand_norm}
+#         candidates = list(col.find(q_candidates, {"model_norm": 1, "raw_text": 1, "model": 1}))
+#         meta["debug"]["model_candidates_count"] = len(candidates)
+#         vlog.info(f"[MODEL] fuzzy candidates_count={len(candidates)}")
+
+#         probes = []
+#         if model_norm:
+#             probes.append(model_norm)
+#         probes += tokens_norm[:10]
+
+#         best_doc = None
+#         best_score = 0.0
+#         best_probe = None
+
+#         for c in candidates:
+#             c_norm = c.get("model_norm") or ""
+#             if not c_norm:
+#                 continue
+#             for p in probes:
+#                 s = similarity(p, c_norm)
+#                 if s > best_score:
+#                     best_score = s
+#                     best_doc = c
+#                     best_probe = p
+
+#         vlog.info(f"[MODEL] fuzzy best_score={best_score:.3f} best_probe='{best_probe}' best_model_norm='{(best_doc or {}).get('model_norm')}' (min={MODEL_FUZZY_MIN})")
+#         meta["debug"]["model_fuzzy_best_probe"] = best_probe
+#         meta["debug"]["model_fuzzy_best_score"] = round(best_score, 3)
+#         meta["debug"]["model_fuzzy_best_model_norm"] = (best_doc or {}).get("model_norm")
+
+#         if best_doc and best_score >= MODEL_FUZZY_MIN and best_doc.get("raw_text"):
+#             text = best_doc["raw_text"]
+#             meta.update({
+#                 "resolved_model_norm": best_doc.get("model_norm"),
+#                 "source": "model_fuzzy",
+#                 "match_type": "model_fuzzy",
+#                 "vademecum_id": str(best_doc.get("_id")),
+#                 "fuzzy_score_model": round(best_score, 3),
+#                 "length_chars": len(text),
+#             })
+#             return text, meta
+
+#     # ======================================================
+#     # C) MODEL GENERICO per brand
+#     # ======================================================
+#     q_generic = {"type": "model", "brand_norm": resolved_brand_norm, "model_norm": GENERIC_MODEL_NORM}
+#     vlog.info(f"[GEN ] generic query={q_generic}")
+
+#     doc = col.find_one(q_generic, {"raw_text": 1, "model_norm": 1})
+#     if doc and doc.get("raw_text"):
+#         text = doc["raw_text"]
+#         meta.update({
+#             "resolved_model_norm": doc.get("model_norm"),
+#             "source": "model_generic",
+#             "match_type": "model_generic",
+#             "vademecum_id": str(doc.get("_id")),
+#             "length_chars": len(text),
+#         })
+#         return text, meta
+
+#     # ======================================================
+#     # D) Nessun vademecum: lascia decidere OpenAI
+#     # ======================================================
+#     vlog.info("[OUT] no_model_no_generic -> openai")
+#     meta.update({
+#         "source": "openai",
+#         "match_type": "none",
+#     })
+#     return "", meta
+
 
 
 
@@ -975,63 +1187,42 @@ async def analizza_oggetto(input: InputAnalisi):
             "errore_raw": raw
         }
 
-	# =========================
-	# 6) Gestione marca/modello (step 1 + possibile revisione step 2)
-	# =========================
+    # =========================
+    # 6) Blocca marca/modello/tipologia dopo step 1
+    # =========================
+    if step_corrente == 1:
+        # ✅ prende tipologia da GPT se presente (supporta 2 chiavi), altrimenti fallback
+        tipologia_gpt = (data.get("tipologia_stimata") or data.get("tipologia") or "").strip()
+        tipologia_finale = tipologia_gpt or tipologia
 
-	marca_db = (analisi or {}).get("marca_stimata")
-	modello_db = (analisi or {}).get("modello_stimato")
+        db[analisi_col].update_one(
+            {"_id": oid},
+            {"$set": {
+                "marca_stimata": data.get("marca_stimata"),
+                "modello_stimato": data.get("modello_stimato"),
+                "tipologia": tipologia_finale  # ✅ aggiunto
+            }}
+        )
 
-	marca_new = (data.get("marca_stimata") or "").strip()
-	modello_new = (data.get("modello_stimato") or "").strip()
+        # ✅ importantissimo: aggiorna anche la variabile locale subito
+        tipologia = tipologia_finale
 
-	def invalido(x: str) -> bool:
-		return not x or x.lower() in {
-			"non identificabile",
-			"non determinabile",
-			"sconosciuto",
-			"unknown",
-			"nd",
-			"n.d."
-		}
+        # 🔥 VADEMECUM — SOLO ORA HA SENSO
+        vademecum_text = ""
+        vmeta = {"found": False, "reason": "not_resolved"}
 
-	def sostanzialmente_diverso(a: str, b: str) -> bool:
-		if not a or not b:
-			return True
-		return similarity(a.lower(), b.lower()) < 0.60
+        brand_raw = data.get("marca_stimata")
+        model_raw = data.get("modello_stimato")
 
-	update = {}
+        logger.info(f"[VADEMECUM CALL] brand='{brand_raw}' model='{model_raw}'")
 
-	# STEP 1 → prima scrittura sempre consentita
-	if step_corrente == 1:
-		if marca_new:
-			update["marca_stimata"] = marca_new
-		if modello_new:
-			update["modello_stimato"] = modello_new
+        if brand_raw and model_raw:
+            vademecum_text, vmeta = load_vademecum_mongo(
+                model_raw,
+                brand_raw,
+                db
+            )
 
-	# STEP 2 → revisione consentita SOLO se prima era NON IDENTIFICABILE
-	elif step_corrente == 2:
-		if (
-			invalido(modello_db)
-			and not invalido(modello_new)
-			and sostanzialmente_diverso(modello_db or "", modello_new)
-		):
-			update["marca_stimata"] = marca_new
-			update["modello_stimato"] = modello_new
-
-	# tipologia: fissala solo allo step 1
-	if step_corrente == 1:
-		tipologia_gpt = (data.get("tipologia_stimata") or data.get("tipologia") or "").strip()
-		if tipologia_gpt:
-			update["tipologia"] = tipologia_gpt
-
-	if update:
-		db[analisi_col].update_one(
-			{"_id": oid},
-			{"$set": update}
-		)
-
-	
     # =========================
     # 7) COSTRUISCI JSON RESPONSE COMPLETO (come versione MySQL)
     # =========================
@@ -1619,7 +1810,271 @@ def admin_vademecum_delete(id: str):
     col.delete_one({"_id": oid})
     return {"status": "ok", "deleted_id": id}
 
+# In[ ]:
 
+
+# # ======================================================
+# # MAIN SERVER
+# # ======================================================
+# if __name__ == "__main__":
+#     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
+#     server = uvicorn.Server(config)
+#     await server.serve()
+
+
+# In[ ]:
+
+
+# import os
+# import mysql.connector
+# from pymongo import MongoClient
+# from datetime import datetime
+# import json
+
+# # ======================================================
+# # MYSQL (come da tuo backend)
+# # ======================================================
+# def get_mysql_connection():
+#     return mysql.connector.connect(
+#         host="127.0.0.1",
+#         user="root",
+#         password="",
+#         database="autentica",
+#         use_pure=True
+#     )
+
+# # ======================================================
+# # MONGO
+# # ======================================================
+# MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://appl_tssanita:appl_tssanita@svi02-mngdb-svil.sogei.it/appl_tssanita?tls=false")
+# MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "tssanita")
+
+
+# mongo = MongoClient(MONGO_URI)
+# db = mongo[MONGO_DB_NAME]
+
+# # ======================================================
+# # MYSQL CONNECT
+# # ======================================================
+# mysql = get_mysql_connection()
+# cur = mysql.cursor(dictionary=True)
+
+# # ======================================================
+# # 1️⃣ MIGRAZIONE ANALISI
+# # ======================================================
+# print("▶ Migrating analisi...")
+# analisi_map = {}  # legacy_id (MySQL) -> ObjectId (Mongo)
+
+# cur.execute("SELECT * FROM analisi")
+# for row in cur.fetchall():
+#     doc = {
+#         "legacy_id": row["id"],
+#         "user_id": row["user_id"],
+#         "stato": row["stato"],
+#         "step_corrente": row["step_corrente"],
+#         "marca_stimata": row["marca_stimata"],
+#         "modello_stimato": row["modello_stimato"],
+#         "percentuale_contraffazione": row["percentuale_contraffazione"],
+#         "giudizio_finale": row["giudizio_finale"],
+#         "created_at": row.get("created_at", datetime.utcnow())
+#     }
+#     res = db.aut_analisi.insert_one(doc)
+#     analisi_map[row["id"]] = res.inserted_id
+
+# print("✔ analisi migrate")
+
+# # ======================================================
+# # 2️⃣ MIGRAZIONE ANALISI_FOTO
+# # ======================================================
+# print("▶ Migrating analisi_foto...")
+
+# cur.execute("SELECT * FROM analisi_foto ORDER BY id_analisi, step")
+# for row in cur.fetchall():
+#     doc = {
+#         "analisi_id": analisi_map[row["id_analisi"]],
+#         "legacy_id_analisi": row["id_analisi"],
+#         "step": row["step"],
+#         "foto_base64": row["foto_base64"],
+#         "json_response": json.loads(row["json_response"]) if row["json_response"] else None,
+#         "created_at": row.get("created_at", datetime.utcnow())
+#     }
+#     db.aut_analisi_foto.insert_one(doc)
+
+# print("✔ analisi_foto migrate")
+
+# # ======================================================
+# # 3️⃣ MIGRAZIONE PROMPTS
+# # ======================================================
+# print("▶ Migrating prompts...")
+
+# cur.execute("SELECT * FROM prompts")
+# for row in cur.fetchall():
+#     db.aut_prompts.insert_one({
+#         "legacy_id": row["id"],
+#         "name": row["name"],
+#         "created_at": row["created_at"]
+#     })
+
+# print("✔ prompts migrate")
+
+# # ======================================================
+# # 4️⃣ MIGRAZIONE PROMPT_VERSIONS
+# # ======================================================
+# print("▶ Migrating prompt_versions...")
+
+# cur.execute("SELECT * FROM prompt_versions")
+# for row in cur.fetchall():
+#     db.aut_prompt_versions.insert_one({
+#         "prompt_name": row["prompt_name"],
+#         "user_id": row["user_id"],
+#         "version": row["version"],
+#         "content": row["content"],
+#         "is_active": bool(row["is_active"]),
+#         "created_at": row["created_at"]
+#     })
+
+# print("✔ prompt_versions migrate")
+
+# # ======================================================
+# # CLEANUP
+# # ======================================================
+# cur.close()
+# mysql.close()
+# mongo.close()
+
+# print("\n✅ MIGRAZIONE COMPLETATA CON SUCCESSO")
+
+
+# In[ ]:
+
+
+# import mysql.connector
+# from pymongo import MongoClient
+# from datetime import datetime, timezone
+# import os
+# # ===============================
+# # MYSQL CONFIG
+# # ===============================
+# # MYSQL (come da tuo backend)
+# # ======================================================
+# def get_mysql_connection():
+#     return mysql.connector.connect(
+#         host="127.0.0.1",
+#         user="root",
+#         password="",
+#         database="aigov",
+#         use_pure=True
+#     )
+
+# MYSQL_TABLE = "anagrafica_personale"
+
+# # ===============================
+# # MONGO CONFIG
+# # ===============================
+# MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://appl_tssanita:appl_tssanita@svi02-mngdb-svil.sogei.it/appl_tssanita?tls=false")
+# MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "tssanita")
+# MONGO_COLLECTION = "aut_users"
+
+
+# def resolve_role(row: dict) -> str:
+#     """
+#     Determina il ruolo in modo coerente
+#     """
+#     if row.get("qualifica"):
+#         return row["qualifica"]
+
+#     if row.get("admin") == 1:
+#         return "admin"
+#     if row.get("viewer") == 1:
+#         return "viewer"
+#     if row.get("member") == 1:
+#         return "member"
+
+#     return "external"
+
+
+# def main():
+#     print("🔄 Migrazione utenti da MySQL → MongoDB")
+
+#     # MYSQL
+#     mysql = get_mysql_connection()
+#     cur = mysql.cursor(dictionary=True)
+
+#     cur.execute(f"SELECT * FROM {MYSQL_TABLE}")
+#     rows = cur.fetchall()
+
+#     if not rows:
+#         print("⚠️ Nessun utente trovato")
+#         return
+
+#     # MONGO
+#     mongo = MongoClient(MONGO_URI)
+#     db = mongo[MONGO_DB_NAME]
+#     col = db[MONGO_COLLECTION]
+
+#     migrated = 0
+#     skipped = 0
+
+#     for r in rows:
+#         user_id = r.get("userid")
+
+#         if not user_id:
+#             skipped += 1
+#             continue
+
+#         # evita duplicati
+#         if col.find_one({"user_id": user_id}):
+#             print(f"⚠️ già presente: {user_id}")
+#             skipped += 1
+#             continue
+
+#         password_hash = r.get("password")
+#         if not password_hash:
+#             print(f"⛔ password mancante per {user_id}")
+#             skipped += 1
+#             continue
+
+#         doc = {
+#             "user_id": user_id,
+#             "password_hash": password_hash,  # già hashata
+#             "is_active": bool(r.get("fl_attivo", 1)),
+#             "role": resolve_role(r),
+
+#             "profile": {
+#                 "nome": r.get("nome"),
+#                 "cognome": r.get("cognome")
+#             },
+
+#             "email": r.get("email"),
+#             "phone": r.get("phone"),
+#             "home": r.get("home"),
+
+#             "must_reset_password": bool(r.get("reset_password", 1)),
+
+#             "created_at": datetime.now(timezone.utc),
+#             "source": "mysql_anagrafica_personale"
+#         }
+
+#         col.insert_one(doc)
+#         migrated += 1
+#         print(f"✅ migrato: {user_id}")
+
+#     print("\n===============================")
+#     print("✔️ MIGRAZIONE COMPLETATA")
+#     print(f"   Migrati : {migrated}")
+#     print(f"   Saltati : {skipped}")
+#     print("===============================")
+
+#     cur.close()
+#     mysql.close()
+#     mongo.close()
+
+
+# if __name__ == "__main__":
+#     main()
+
+
+# In[ ]:
 
 
 
