@@ -1416,6 +1416,31 @@ def admin_dashboard_top_contraffatti(
 
     return items
 
+@app.get("/admin/dashboard/fake-ratio")
+def admin_dashboard_fake_ratio(soglia: int = 50):
+    db = get_db()
+
+    total = db.aut_analisi.count_documents({"step_corrente": 1})
+
+    fake = db.aut_analisi.count_documents({
+        "step_corrente": 1,
+        "$expr": {
+            "$lte": [
+                { "$toInt": "$percentuale_contraffazione" },
+                soglia
+            ]
+        }
+    })
+
+    return {
+        "fake": fake,
+        "genuine": max(0, total - fake)
+    }
+
+
+
+
+
 
 # ============================================
 # LOGIN
@@ -1734,7 +1759,6 @@ def admin_vademecum_delete(id: str):
     col.delete_one({"_id": oid})
     return {"status": "ok", "deleted_id": id}
 
-# In[ ]:
 
 
 # # ======================================================
@@ -1744,6 +1768,7 @@ def admin_vademecum_delete(id: str):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
