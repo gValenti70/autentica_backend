@@ -1351,29 +1351,58 @@ def admin_dashboard_top_contraffatti(
     db = get_db()
 
     pipeline = [
-        {
-            "$match": {
-                "step_corrente": 1,
-                "$expr": {
-                    "$lte": [
-                        { "$toInt": "$percentuale_contraffazione" },
-                        soglia
-                    ]
+    {
+        "$match": {
+            "step_corrente": 1,
+            "$expr": {
+                "$lte": [
+                    { "$toInt": "$percentuale_contraffazione" },
+                    soglia
+                ]
+            }
+        }
+    },
+    {
+        "$lookup": {
+            "from": "aut_analisi_foto",
+            "localField": "_id",
+            "foreignField": "id_analisi",
+            "as": "foto"
+        }
+    },
+    {
+        "$addFields": {
+            "foto_base64": {
+                "$first": {
+                    "$map": {
+                        "input": {
+                            "$filter": {
+                                "input": "$foto",
+                                "as": "f",
+                                "cond": { "$eq": ["$$f.step", 1] }
+                            }
+                        },
+                        "as": "f",
+                        "in": "$$f.foto_base64"
+                    }
                 }
             }
-        },
-        {
-            "$group": {
-                "_id": {
-                    "marca": "$marca_stimata",
-                    "modello": "$modello_stimato"
-                },
-                "tot": { "$sum": 1 }
-            }
-        },
-        { "$sort": { "tot": -1 } },
-        { "$limit": limit }
-    ]
+        }
+    },
+    {
+        "$group": {
+            "_id": {
+                "marca": "$marca_stimata",
+                "modello": "$modello_stimato"
+            },
+            "tot": { "$sum": 1 },
+            "foto": { "$first": "$foto_base64" }
+        }
+    },
+    { "$sort": { "tot": -1 } },
+    { "$limit": limit }
+]
+
 
     rows = list(db.aut_analisi.aggregate(pipeline))
 
@@ -1715,6 +1744,7 @@ def admin_vademecum_delete(id: str):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
