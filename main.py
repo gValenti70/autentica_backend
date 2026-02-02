@@ -1342,79 +1342,96 @@ def admin_dashboard_top_contraffatti(
     soglia: int = Query(50, ge=0, le=100),
     limit: int = Query(5, ge=1, le=20),
 ):
-    """
-    Ritorna la TOP N (default 5) marca + modello
-    con più analisi considerate contraffatte
-    (step 1, percentuale <= soglia)
-    """
-
     db = get_db()
 
     pipeline = [
-    {
-        "$match": {
-            "step_corrente": 1,
-            "$expr": {
-                "$lte": [
-                    { "$toInt": "$percentuale_contraffazione" },
-                    soglia
-                ]
+        {
+            "$match": {
+                "step_corrente": 1,
+
+                # soglia contraffazione
+                "$expr": {
+                    "$lte": [
+                        { "$toInt": "$percentuale_contraffazione" },
+                        soglia
+                    ]
+                },
+
+                # ❌ ESCLUSIONE MARCA NON VALIDA
+                "marca_stimata": {
+                    "$nin": [None, "", "N.D.", "ND", "n.d."]
+                },
+
+                # ❌ ESCLUSIONE MODELLO NON VALIDO
+                "modello_stimato": {
+                    "$nin": [
+                        None,
+                        "",
+                        "N.D.",
+                        "n.d.",
+                        "non determinabile",
+                        "non determinato"
+                    ]
+                }
             }
-        }
-    },
-    {
-        "$lookup": {
-            "from": "aut_analisi_foto",
-            "localField": "_id",
-            "foreignField": "id_analisi",
-            "as": "foto"
-        }
-    },
-    {
-        "$addFields": {
-            "foto_base64": {
-                "$first": {
-                    "$map": {
-                        "input": {
-                            "$filter": {
-                                "input": "$foto",
-                                "as": "f",
-                                "cond": { "$eq": ["$$f.step", 1] }
-                            }
-                        },
-                        "as": "f",
-                        "in": "$$f.foto_base64"
+        },
+
+        {
+            "$lookup": {
+                "from": "aut_analisi_foto",
+                "localField": "_id",
+                "foreignField": "id_analisi",
+                "as": "foto"
+            }
+        },
+
+        {
+            "$addFields": {
+                "foto_base64": {
+                    "$first": {
+                        "$map": {
+                            "input": {
+                                "$filter": {
+                                    "input": "$foto",
+                                    "as": "f",
+                                    "cond": { "$eq": ["$$f.step", 1] }
+                                }
+                            },
+                            "as": "f",
+                            "in": "$$f.foto_base64"
+                        }
                     }
                 }
             }
-        }
-    },
-    {
-        "$group": {
-            "_id": {
-                "marca": "$marca_stimata",
-                "modello": "$modello_stimato"
-            },
-            "tot": { "$sum": 1 },
-            "foto": { "$first": "$foto_base64" }
-        }
-    },
-    { "$sort": { "tot": -1 } },
-    { "$limit": limit }
-]
+        },
 
+        {
+            "$group": {
+                "_id": {
+                    "marca": "$marca_stimata",
+                    "modello": "$modello_stimato"
+                },
+                "tot": { "$sum": 1 },
+                "foto": { "$first": "$foto_base64" }
+            }
+        },
+
+        { "$sort": { "tot": -1 } },
+        { "$limit": limit }
+    ]
 
     rows = list(db.aut_analisi.aggregate(pipeline))
 
-    items = []
-    for r in rows:
-        items.append({
-            "marca": r["_id"].get("marca"),
-            "modello": r["_id"].get("modello"),
-            "tot": r.get("tot", 0)
-        })
+    return [
+        {
+            "marca": r["_id"]["marca"],
+            "modello": r["_id"]["modello"],
+            "tot": r["tot"],
+            "foto": r.get("foto")
+        }
+        for r in rows
+    ]
 
-    return items
 
 @app.get("/admin/dashboard/fake-ratio")
 def admin_dashboard_fake_ratio(soglia: int = 50):
@@ -1768,6 +1785,7 @@ def admin_vademecum_delete(id: str):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
