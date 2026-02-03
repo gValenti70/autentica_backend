@@ -1389,7 +1389,8 @@ def admin_dashboard_top_contraffatti(
         "nd",
         "n.d.",
         "non determinabile",
-        "non identificabile"
+        "non identificabile",
+        "incerto",
     ]
 
     pipeline = [
@@ -1439,7 +1440,7 @@ def admin_dashboard_top_contraffatti(
         { "$sort": { "tot": -1, "percentuale_media": -1 } },
         { "$limit": limit },
 
-        # 5️⃣ foto rappresentativa (step 2 > step 1)
+        # 5️⃣ foto rappresentativa (SOLO step 1)
         {
             "$lookup": {
                 "from": "aut_analisi_foto",
@@ -1450,18 +1451,42 @@ def admin_dashboard_top_contraffatti(
                             "$expr": {
                                 "$and": [
                                     { "$eq": ["$id_analisi", "$$aid"] },
-                                    { "$in": ["$step", [1, 2]] }
+                                    { "$eq": ["$step", 1] }
                                 ]
                             }
                         }
                     },
-                    { "$sort": { "step": -1 } },
-                    { "$limit": 1 },
-                    { "$project": { "_id": 0, "foto_base64": 1 } }
+                    { "$project": { "_id": 0, "foto_base64": 1 } },
+                    { "$limit": 1 }
                 ],
                 "as": "foto"
             }
-        },
+        }
+
+        
+        # # 5️⃣ foto rappresentativa (step 2 > step 1)
+        # {
+        #     "$lookup": {
+        #         "from": "aut_analisi_foto",
+        #         "let": { "aid": "$sample_analisi_id" },
+        #         "pipeline": [
+        #             {
+        #                 "$match": {
+        #                     "$expr": {
+        #                         "$and": [
+        #                             { "$eq": ["$id_analisi", "$$aid"] },
+        #                             { "$in": ["$step", [1, 2]] }
+        #                         ]
+        #                     }
+        #                 }
+        #             },
+        #             { "$sort": { "step": -1 } },
+        #             { "$limit": 1 },
+        #             { "$project": { "_id": 0, "foto_base64": 1 } }
+        #         ],
+        #         "as": "foto"
+        #     }
+        # },
 
         # 6️⃣ flatten
         {
@@ -1838,6 +1863,7 @@ def admin_vademecum_delete(id: str):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
