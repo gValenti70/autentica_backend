@@ -1198,13 +1198,17 @@ def admin_list_analisi(
     modello: Optional[str] = Query(None),
     min_percentuale: Optional[int] = Query(None, ge=0, le=100),
     page: int = Query(1, ge=1),
-    page_size: int = Query(5, ge=1, le=200),
+    page_size: int = Query(10, ge=1, le=200),
 ):
     db = get_db()
 
     match = {}
-    if min_percentuale is not None:
-        match["percentuale_contraffazione"] = {"$gte": min_percentuale}
+
+    # =========================
+    # FILTRI ESATTI (dashboard)
+    # =========================
+    if stato:
+        match["stato"] = stato.lower()
 
     if marca:
         match["marca_stimata"] = marca
@@ -1212,9 +1216,20 @@ def admin_list_analisi(
     if modello:
         match["modello_stimato"] = modello
 
-    if stato:
-        match["stato"] = stato
+    # =========================
+    # FILTRO PERCENTUALE (string → int)
+    # =========================
+    if min_percentuale is not None:
+        match["$expr"] = {
+            "$gte": [
+                { "$toInt": "$percentuale_contraffazione" },
+                min_percentuale
+            ]
+        }
 
+    # =========================
+    # SEARCH LIBERA (admin)
+    # =========================
     if search:
         regex = {"$regex": search, "$options": "i"}
         or_list = [
@@ -1226,7 +1241,9 @@ def admin_list_analisi(
             or_list.append({"_id": ObjectId(search)})
         match["$or"] = or_list
 
-    # ✅ totale VERO
+    # =========================
+    # PAGINAZIONE
+    # =========================
     total = db.aut_analisi.count_documents(match)
     total_pages = max(1, ceil(total / page_size))
 
@@ -1235,12 +1252,14 @@ def admin_list_analisi(
 
     skip = (page - 1) * page_size
 
+    # =========================
+    # PIPELINE
+    # =========================
     pipeline = [
         {"$match": match},
         {"$sort": {"created_at": -1}},
         {"$skip": skip},
         {"$limit": page_size},
-
         {
             "$lookup": {
                 "from": "aut_analisi_foto",
@@ -1252,7 +1271,12 @@ def admin_list_analisi(
         {
             "$addFields": {
                 "totale_foto": {"$size": "$foto"},
-                "last_step": {"$ifNull": [{"$max": "$foto.step"}, 1]}
+                "last_step": {
+                    "$ifNull": [
+                        {"$max": "$foto.step"},
+                        1
+                    ]
+                }
             }
         },
         {"$project": {"foto": 0}}
@@ -1260,6 +1284,9 @@ def admin_list_analisi(
 
     rows = list(db.aut_analisi.aggregate(pipeline))
 
+    # =========================
+    # OUTPUT
+    # =========================
     items = []
     for r in rows:
         items.append({
@@ -1273,7 +1300,7 @@ def admin_list_analisi(
             "percentuale_contraffazione": r.get("percentuale_contraffazione"),
             "totale_foto": r.get("totale_foto", 0),
             "last_step": r.get("last_step") or 1,
-            "created_at": safe_iso_datetime(r.get("created_at")) if r.get("created_at") else None
+            "created_at": safe_iso_datetime(r.get("created_at"))
         })
 
     return {
@@ -1283,6 +1310,7 @@ def admin_list_analisi(
         "page_size": page_size,
         "total_pages": total_pages
     }
+
 
 
 
@@ -1351,71 +1379,31 @@ from math import ceil
 @app.get("/admin/dashboard/top-contrafatti")
 def admin_dashboard_top_contraffatti(
     soglia: int = Query(50, ge=0, le=100),
-    limit: int = Query(5, ge=1, le=20),
+    limit: int = Query(5, ge=1, le=50),
 ):
     db = get_db()
 
     pipeline = [
         {
             "$match": {
-                "step_corrente": 1,
-
-                # soglia contraffazione
-                "$expr": {
-                    "$lte": [
-                        { "$toInt": "$percentuale_contraffazione" },
-                        soglia
-                    ]
-                },
-
-                # ❌ ESCLUSIONE MARCA NON VALIDA
-                "marca_stimata": {
-                    "$nin": [None, "", "N.D.", "ND", "n.d."]
-                },
-
-                # ❌ ESCLUSIONE MODELLO NON VALIDO
-                "modello_stimato": {
-                    "$nin": [
-                        None,
-                        "",
-                        "N.D.",
-                        "n.d.",
-                        "non determinabile",
-                        "non determinato"
-                    ]
-                }
+                "stato": "completata",
+                "percentuale_contraffazione": {"$ne": None},
+                "marca_stimata": {"$nin": [None, ""]},
+                "modello_stimato": {"$nin": [None, ""]}
             }
         },
-
-        {
-            "$lookup": {
-                "from": "aut_analisi_foto",
-                "localField": "_id",
-                "foreignField": "id_analisi",
-                "as": "foto"
-            }
-        },
-
         {
             "$addFields": {
-                "foto_base64": {
-                    "$first": {
-                        "$map": {
-                            "input": {
-                                "$filter": {
-                                    "input": "$foto",
-                                    "as": "f",
-                                    "cond": { "$eq": ["$$f.step", 1] }
-                                }
-                            },
-                            "as": "f",
-                            "in": "$$f.foto_base64"
-                        }
-                    }
+                "percentuale_num": {
+                    "$toInt": "$percentuale_contraffazione"
                 }
             }
         },
-
+        {
+            "$match": {
+                "percentuale_num": {"$gte": soglia}
+            }
+        },
         {
             "$group": {
                 "_id": {
@@ -1423,12 +1411,19 @@ def admin_dashboard_top_contraffatti(
                     "modello": "$modello_stimato"
                 },
                 "tot": { "$sum": 1 },
-                "foto": { "$first": "$foto_base64" }
+                "percentuale_media": { "$avg": "$percentuale_num" },
+                "percentuale_max": { "$max": "$percentuale_num" }
             }
         },
-
-        { "$sort": { "tot": -1 } },
-        { "$limit": limit }
+        {
+            "$sort": {
+                "tot": -1,
+                "percentuale_media": -1
+            }
+        },
+        {
+            "$limit": limit
+        }
     ]
 
     rows = list(db.aut_analisi.aggregate(pipeline))
@@ -1438,7 +1433,8 @@ def admin_dashboard_top_contraffatti(
             "marca": r["_id"]["marca"],
             "modello": r["_id"]["modello"],
             "tot": r["tot"],
-            "foto": r.get("foto")
+            "percentuale_media": round(r["percentuale_media"], 1),
+            "percentuale_max": r["percentuale_max"]
         }
         for r in rows
     ]
@@ -1796,6 +1792,7 @@ def admin_vademecum_delete(id: str):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
