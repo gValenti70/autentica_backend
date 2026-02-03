@@ -1378,20 +1378,32 @@ from math import ceil
 
 @app.get("/admin/dashboard/top-contrafatti")
 def admin_dashboard_top_contraffatti(
-    soglia: int = Query(50, ge=0, le=100),
+    soglia: int = Query(50, ge=0, le=99),
     limit: int = Query(5, ge=1, le=50),
 ):
     db = get_db()
 
+    INVALID_VALUES = [
+        None,
+        "",
+        "nd",
+        "n.d.",
+        "non determinabile",
+        "non identificabile"
+    ]
+
     pipeline = [
+        # 1️⃣ solo analisi finali
         {
             "$match": {
                 "stato": "completata",
                 "percentuale_contraffazione": {"$ne": None},
-                "marca_stimata": {"$nin": [None, ""]},
-                "modello_stimato": {"$nin": [None, ""]}
+                "marca_stimata": {"$nin": INVALID_VALUES},
+                "modello_stimato": {"$nin": INVALID_VALUES}
             }
         },
+
+        # 2️⃣ percentuale → int
         {
             "$addFields": {
                 "percentuale_num": {
@@ -1399,11 +1411,18 @@ def admin_dashboard_top_contraffatti(
                 }
             }
         },
+
+        # 3️⃣ filtri SEMANTICI
         {
             "$match": {
-                "percentuale_num": {"$gte": soglia}
+                "percentuale_num": {
+                    "$gte": soglia,
+                    "$lt": 100          # ❌ esclude i 100
+                }
             }
         },
+
+        # 4️⃣ aggregazione TOP FAKE
         {
             "$group": {
                 "_id": {
@@ -1412,17 +1431,43 @@ def admin_dashboard_top_contraffatti(
                 },
                 "tot": { "$sum": 1 },
                 "percentuale_media": { "$avg": "$percentuale_num" },
-                "percentuale_max": { "$max": "$percentuale_num" }
+                "percentuale_max": { "$max": "$percentuale_num" },
+                "sample_analisi_id": { "$first": "$_id" }
             }
         },
+
+        { "$sort": { "tot": -1, "percentuale_media": -1 } },
+        { "$limit": limit },
+
+        # 5️⃣ foto rappresentativa (step 2 > step 1)
         {
-            "$sort": {
-                "tot": -1,
-                "percentuale_media": -1
+            "$lookup": {
+                "from": "aut_analisi_foto",
+                "let": { "aid": "$sample_analisi_id" },
+                "pipeline": [
+                    {
+                        "$match": {
+                            "$expr": {
+                                "$and": [
+                                    { "$eq": ["$id_analisi", "$$aid"] },
+                                    { "$in": ["$step", [1, 2]] }
+                                ]
+                            }
+                        }
+                    },
+                    { "$sort": { "step": -1 } },
+                    { "$limit": 1 },
+                    { "$project": { "_id": 0, "foto_base64": 1 } }
+                ],
+                "as": "foto"
             }
         },
+
+        # 6️⃣ flatten
         {
-            "$limit": limit
+            "$addFields": {
+                "foto": { "$first": "$foto.foto_base64" }
+            }
         }
     ]
 
@@ -1434,7 +1479,8 @@ def admin_dashboard_top_contraffatti(
             "modello": r["_id"]["modello"],
             "tot": r["tot"],
             "percentuale_media": round(r["percentuale_media"], 1),
-            "percentuale_max": r["percentuale_max"]
+            "percentuale_max": r["percentuale_max"],
+            "foto": r.get("foto")
         }
         for r in rows
     ]
@@ -1792,6 +1838,7 @@ def admin_vademecum_delete(id: str):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
