@@ -1378,7 +1378,7 @@ from math import ceil
 
 @app.get("/admin/dashboard/top-contrafatti")
 def admin_dashboard_top_contraffatti(
-    soglia: int = Query(50, ge=0, le=99),
+    soglia: int = Query(65, ge=0, le=99),
     limit: int = Query(5, ge=1, le=50),
 ):
     db = get_db()
@@ -1863,6 +1863,7 @@ def admin_vademecum_delete(id: str):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
