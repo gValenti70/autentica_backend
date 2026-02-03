@@ -1461,7 +1461,7 @@ def admin_dashboard_top_contraffatti(
                 ],
                 "as": "foto"
             }
-        }
+        },
 
         
         # # 5️⃣ foto rappresentativa (step 2 > step 1)
@@ -1863,6 +1863,7 @@ def admin_vademecum_delete(id: str):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
