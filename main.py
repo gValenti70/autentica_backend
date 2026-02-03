@@ -1194,12 +1194,23 @@ def stato_analisi(id_analisi: str):
 def admin_list_analisi(
     search: Optional[str] = Query(None),
     stato: Optional[str] = Query(None),
+    marca: Optional[str] = Query(None),
+    modello: Optional[str] = Query(None),
+    min_percentuale: Optional[int] = Query(None, ge=0, le=100),
     page: int = Query(1, ge=1),
     page_size: int = Query(5, ge=1, le=200),
 ):
     db = get_db()
 
     match = {}
+    if min_percentuale is not None:
+        match["percentuale_contraffazione"] = {"$gte": min_percentuale}
+
+    if marca:
+        match["marca_stimata"] = marca
+
+    if modello:
+        match["modello_stimato"] = modello
 
     if stato:
         match["stato"] = stato
@@ -1785,6 +1796,7 @@ def admin_vademecum_delete(id: str):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
