@@ -267,12 +267,8 @@ def sostanzialmente_diverso(a: str, b: str) -> bool:
 vlog = logging.getLogger("VADEMECUM")
 vlog.setLevel(logging.INFO)
 
-# BRAND_FUZZY_MIN = 0.85
-BRAND_FUZZY_MIN = os.getenv("BRAND_FUZZY_MIN", "0.85")
-
-# MODEL_FUZZY_MIN = 0.63  # puoi alzarlo (es 0.75) se vuoi meno false positive
-MODEL_FUZZY_MIN = os.getenv("MODEL_FUZZY_MIN", "0.63")
-
+BRAND_FUZZY_MIN = 0.85
+MODEL_FUZZY_MIN = 0.60  # puoi alzarlo (es 0.75) se vuoi meno false positive
 GENERIC_MODEL_NORM = "generico"  # deve combaciare con come lo salvi in Cosmos
 
 def _tokens_norm(s: str):
@@ -1867,8 +1863,6 @@ def admin_vademecum_delete(id: str):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
-
-
 
 
 
