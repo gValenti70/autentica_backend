@@ -1189,6 +1189,10 @@ def stato_analisi(id_analisi: str):
         "ultimo_json": ultimo_json
     }
 
+from math import ceil
+from fastapi import Query
+from typing import Optional
+from bson import ObjectId
 
 @app.get("/admin/analisi")
 def admin_list_analisi(
@@ -1198,15 +1202,17 @@ def admin_list_analisi(
     modello: Optional[str] = Query(None),
     min_percentuale: Optional[int] = Query(None, ge=0, le=100),
     page: int = Query(1, ge=1),
-    page_size: int = Query(10, ge=1, le=200),
+    page_size: int = Query(25, ge=1, le=200),
 ):
     db = get_db()
+    collection = db.aut_analisi
 
     match = {}
 
     # =========================
-    # FILTRI ESATTI (dashboard)
+    # FILTRI INDICIZZABILI
     # =========================
+
     if stato:
         match["stato"] = stato.lower()
 
@@ -1216,20 +1222,13 @@ def admin_list_analisi(
     if modello:
         match["modello_stimato"] = modello
 
-    # =========================
-    # FILTRO PERCENTUALE (string → int)
-    # =========================
     if min_percentuale is not None:
-        match["$expr"] = {
-            "$gte": [
-                { "$toInt": "$percentuale_contraffazione" },
-                min_percentuale
-            ]
-        }
+        match["percentuale_contraffazione"] = {"$gte": min_percentuale}
 
     # =========================
-    # SEARCH LIBERA (admin)
+    # SEARCH
     # =========================
+
     if search:
         regex = {"$regex": search, "$options": "i"}
         or_list = [
@@ -1237,69 +1236,78 @@ def admin_list_analisi(
             {"marca_stimata": regex},
             {"modello_stimato": regex},
         ]
+
         if ObjectId.is_valid(search):
             or_list.append({"_id": ObjectId(search)})
+
         match["$or"] = or_list
 
     # =========================
     # PAGINAZIONE
     # =========================
-    total = db.aut_analisi.count_documents(match)
+
+    skip = (page - 1) * page_size
+
+    # =========================
+    # PIPELINE OTTIMIZZATA
+    # =========================
+
+    pipeline = [
+        {"$match": match},
+        {
+            "$facet": {
+                "items": [
+                    {"$sort": {"created_at": -1}},
+                    {"$skip": skip},
+                    {"$limit": page_size},
+                    {
+                        "$project": {
+                            "user_id": 1,
+                            "stato": 1,
+                            "tipologia": 1,
+                            "marca_stimata": 1,
+                            "modello_stimato": 1,
+                            "percentuale_contraffazione": 1,
+                            "totale_foto": 1,
+                            "last_step": 1,
+                            "created_at": 1
+                        }
+                    }
+                ],
+                "totalCount": [
+                    {"$count": "count"}
+                ]
+            }
+        }
+    ]
+
+    result = list(collection.aggregate(pipeline))[0]
+
+    items_raw = result.get("items", [])
+    total_raw = result.get("totalCount", [])
+
+    total = total_raw[0]["count"] if total_raw else 0
     total_pages = max(1, ceil(total / page_size))
 
     if page > total_pages:
         page = total_pages
 
-    skip = (page - 1) * page_size
-
-    # =========================
-    # PIPELINE
-    # =========================
-    pipeline = [
-        {"$match": match},
-        {"$sort": {"created_at": -1}},
-        {"$skip": skip},
-        {"$limit": page_size},
-        {
-            "$lookup": {
-                "from": "aut_analisi_foto",
-                "localField": "_id",
-                "foreignField": "id_analisi",
-                "as": "foto"
-            }
-        },
-        {
-            "$addFields": {
-                "totale_foto": {"$size": "$foto"},
-                "last_step": {
-                    "$ifNull": [
-                        {"$max": "$foto.step"},
-                        1
-                    ]
-                }
-            }
-        },
-        {"$project": {"foto": 0}}
-    ]
-
-    rows = list(db.aut_analisi.aggregate(pipeline))
-
     # =========================
     # OUTPUT
     # =========================
+
     items = []
-    for r in rows:
+    for r in items_raw:
         items.append({
             "id": str(r["_id"]),
             "user_id": r.get("user_id"),
             "stato": r.get("stato"),
-            "step_corrente": r.get("step_corrente"),
             "tipologia": r.get("tipologia"),
             "marca_stimata": r.get("marca_stimata"),
             "modello_stimato": r.get("modello_stimato"),
             "percentuale_contraffazione": r.get("percentuale_contraffazione"),
             "totale_foto": r.get("totale_foto", 0),
-            "last_step": r.get("last_step") or 1,
+            "last_step": r.get("last_step", 1),
             "created_at": safe_iso_datetime(r.get("created_at"))
         })
 
@@ -1310,6 +1318,128 @@ def admin_list_analisi(
         "page_size": page_size,
         "total_pages": total_pages
     }
+
+
+# @app.get("/admin/analisi")
+# def admin_list_analisi(
+#     search: Optional[str] = Query(None),
+#     stato: Optional[str] = Query(None),
+#     marca: Optional[str] = Query(None),
+#     modello: Optional[str] = Query(None),
+#     min_percentuale: Optional[int] = Query(None, ge=0, le=100),
+#     page: int = Query(1, ge=1),
+#     page_size: int = Query(10, ge=1, le=200),
+# ):
+#     db = get_db()
+
+#     match = {}
+
+#     # =========================
+#     # FILTRI ESATTI (dashboard)
+#     # =========================
+#     if stato:
+#         match["stato"] = stato.lower()
+
+#     if marca:
+#         match["marca_stimata"] = marca
+
+#     if modello:
+#         match["modello_stimato"] = modello
+
+#     # =========================
+#     # FILTRO PERCENTUALE (string → int)
+#     # =========================
+#     if min_percentuale is not None:
+#         match["$expr"] = {
+#             "$gte": [
+#                 { "$toInt": "$percentuale_contraffazione" },
+#                 min_percentuale
+#             ]
+#         }
+
+#     # =========================
+#     # SEARCH LIBERA (admin)
+#     # =========================
+#     if search:
+#         regex = {"$regex": search, "$options": "i"}
+#         or_list = [
+#             {"user_id": regex},
+#             {"marca_stimata": regex},
+#             {"modello_stimato": regex},
+#         ]
+#         if ObjectId.is_valid(search):
+#             or_list.append({"_id": ObjectId(search)})
+#         match["$or"] = or_list
+
+#     # =========================
+#     # PAGINAZIONE
+#     # =========================
+#     total = db.aut_analisi.count_documents(match)
+#     total_pages = max(1, ceil(total / page_size))
+
+#     if page > total_pages:
+#         page = total_pages
+
+#     skip = (page - 1) * page_size
+
+#     # =========================
+#     # PIPELINE
+#     # =========================
+#     pipeline = [
+#         {"$match": match},
+#         {"$sort": {"created_at": -1}},
+#         {"$skip": skip},
+#         {"$limit": page_size},
+#         {
+#             "$lookup": {
+#                 "from": "aut_analisi_foto",
+#                 "localField": "_id",
+#                 "foreignField": "id_analisi",
+#                 "as": "foto"
+#             }
+#         },
+#         {
+#             "$addFields": {
+#                 "totale_foto": {"$size": "$foto"},
+#                 "last_step": {
+#                     "$ifNull": [
+#                         {"$max": "$foto.step"},
+#                         1
+#                     ]
+#                 }
+#             }
+#         },
+#         {"$project": {"foto": 0}}
+#     ]
+
+#     rows = list(db.aut_analisi.aggregate(pipeline))
+
+#     # =========================
+#     # OUTPUT
+#     # =========================
+#     items = []
+#     for r in rows:
+#         items.append({
+#             "id": str(r["_id"]),
+#             "user_id": r.get("user_id"),
+#             "stato": r.get("stato"),
+#             "step_corrente": r.get("step_corrente"),
+#             "tipologia": r.get("tipologia"),
+#             "marca_stimata": r.get("marca_stimata"),
+#             "modello_stimato": r.get("modello_stimato"),
+#             "percentuale_contraffazione": r.get("percentuale_contraffazione"),
+#             "totale_foto": r.get("totale_foto", 0),
+#             "last_step": r.get("last_step") or 1,
+#             "created_at": safe_iso_datetime(r.get("created_at"))
+#         })
+
+#     return {
+#         "items": items,
+#         "total": total,
+#         "page": page,
+#         "page_size": page_size,
+#         "total_pages": total_pages
+#     }
 
 
 
@@ -1863,6 +1993,7 @@ def admin_vademecum_delete(id: str):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
