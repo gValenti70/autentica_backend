@@ -1260,8 +1260,49 @@ def admin_list_analisi(
                     {"$sort": {"created_at": -1}},
                     {"$skip": skip},
                     {"$limit": page_size},
+    
+                    {
+                        "$lookup": {
+                            "from": "aut_analisi_foto",
+                            "let": {"analisi_id": "$_id"},
+                            "pipeline": [
+                                {
+                                    "$match": {
+                                        "$expr": {
+                                            "$eq": ["$id_analisi", "$$analisi_id"]
+                                        }
+                                    }
+                                },
+                                {
+                                    "$group": {
+                                        "_id": None,
+                                        "totale_foto": {"$sum": 1},
+                                        "last_step": {"$max": "$step"}
+                                    }
+                                }
+                            ],
+                            "as": "foto_stats"
+                        }
+                    },
+                    {
+                        "$addFields": {
+                            "totale_foto": {
+                                "$ifNull": [
+                                    {"$arrayElemAt": ["$foto_stats.totale_foto", 0]},
+                                    0
+                                ]
+                            },
+                            "last_step": {
+                                "$ifNull": [
+                                    {"$arrayElemAt": ["$foto_stats.last_step", 0]},
+                                    1
+                                ]
+                            }
+                        }
+                    },
                     {
                         "$project": {
+                            "foto_stats": 0,
                             "user_id": 1,
                             "stato": 1,
                             "tipologia": 1,
@@ -1993,6 +2034,7 @@ def admin_vademecum_delete(id: str):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
