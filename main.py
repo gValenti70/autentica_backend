@@ -4,9 +4,10 @@ import time
 import re
 from datetime import datetime, timezone
 from typing import Optional, Tuple, Any, Dict, List, Literal
-from fastapi import FastAPI, Query
+from fastapi import FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi import HTTPException
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from difflib import SequenceMatcher
 from openai import AzureOpenAI
@@ -46,7 +47,20 @@ client_gpt = AzureOpenAI(
     api_version=AZURE_OPENAI_API_VERSION,
 )
 
-MAX_FOTO = int(os.getenv("MAX_FOTO", "7"))
+MAX_FOTO = int(os.getenv("MAX_FOTO", "5"))
+
+# ======================================================
+# API KEY BACKEND (PEZZA TEMPORANEA)
+# ======================================================
+BACKEND_API_KEYS = {
+    k.strip()
+    for k in os.getenv("BACKEND_API_KEYS", "").split(",")
+    if k.strip()
+}
+
+if not BACKEND_API_KEYS:
+    logger.warning("⚠️ BACKEND_API_KEYS non configurata!")
+    
 
 # ======================================================
 # MONGO CONFIG
@@ -118,6 +132,23 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"]
 )
+
+@app.middleware("http")
+async def enforce_api_key(request: Request, call_next):
+
+    # Salta eventuale healthcheck root se vuoi lasciarlo pubblico
+    if request.url.path == "/":
+        return await call_next(request)
+
+    api_key = request.headers.get("X-API-Key")
+
+    if not api_key or api_key not in BACKEND_API_KEYS:
+        return JSONResponse(
+            status_code=401,
+            content={"detail": "Unauthorized"}
+        )
+
+    return await call_next(request)
 
 @app.on_event("startup")
 def startup():
@@ -1865,6 +1896,7 @@ def admin_vademecum_delete(id: str):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
