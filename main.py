@@ -1888,7 +1888,59 @@ def admin_vademecum_delete(id: str):
     return {"status": "ok", "deleted_id": id}
 
 
+@app.get("/periti_disponibili")
+def periti_disponibili(
+    tipologia: str = Query(...),
+    regione: str = Query(...)
+):
+    db = get_db()
 
+    col_map = db["mappa_tipologie"]
+    col_periti = db["periti"]
+
+    # 1️⃣ trovo la categoria perito dalla tipologia
+    mapping = col_map.find_one({"tipologia": tipologia.lower()})
+
+    if not mapping:
+        return {
+            "tipologia": tipologia,
+            "categoria_perito": None,
+            "periti": []
+        }
+
+    categoria = mapping["categoria_perito"]
+
+    # 2️⃣ trovo i periti
+    match: Dict[str, Any] = {
+        "attivo": True,
+        "regioni": regione.upper(),
+        "competenze": categoria
+    }
+
+    rows = list(
+        col_periti.find(match)
+                  .sort([("cognome", 1)])
+    )
+
+    periti = []
+
+    for r in rows:
+        periti.append({
+            "id": str(r["_id"]),
+            "nome": r["nome"],
+            "cognome": r["cognome"],
+            "email": r["email"],
+            "regioni": r.get("regioni", []),
+            "competenze": r.get("competenze", [])
+        })
+
+    return {
+        "tipologia": tipologia,
+        "categoria_perito": categoria,
+        "macro_categoria": mapping.get("macro_categoria"),
+        "count": len(periti),
+        "periti": periti
+    }
 # # ======================================================
 # # MAIN SERVER
 # # ======================================================
