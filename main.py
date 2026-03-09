@@ -42,7 +42,7 @@ from fastapi.responses import JSONResponse
 
 from db.mongo import get_db
 from core.config import *
-
+from services.mailer import invia_mail_perizia
 
 # ======================================================
 # LOGGING
@@ -2076,28 +2076,7 @@ Apri analisi completa
 
 
 
-def invia_mail_perizia(email, html):
 
-    smtp_host = os.getenv("SMTP_HOST")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_user = os.getenv("SMTP_USER")
-    smtp_pass = os.getenv("SMTP_PASSWORD")
-    mail_from = os.getenv("MAIL_FROM")
-
-    msg = MIMEText(html, "html")
-
-    msg["Subject"] = "Richiesta perizia - Autentica"
-    msg["From"] = mail_from
-    msg["To"] = email
-
-    with smtplib.SMTP(smtp_host, smtp_port) as s:
-
-        s.starttls()
-
-        if smtp_user and smtp_pass:
-            s.login(smtp_user, smtp_pass)
-
-        s.send_message(msg)
 
 # # ======================================================
 # # MAIN SERVER
@@ -2106,6 +2085,7 @@ def invia_mail_perizia(email, html):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
