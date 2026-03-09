@@ -113,9 +113,9 @@ if not BACKEND_API_KEYS:
 #         )
 #     return _mongo_client
 
-def get_db():
-    client = get_mongo_client()
-    return client[MONGO_DB_NAME]
+# def get_db():
+#     client = get_mongo_client()
+#     return client[MONGO_DB_NAME]
 
 def safe_iso_datetime(value):
     if value is None:
@@ -2106,6 +2106,7 @@ def invia_mail_perizia(email, html):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
