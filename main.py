@@ -64,7 +64,7 @@ logger = logging.getLogger(__name__)
 #     api_version=AZURE_OPENAI_API_VERSION,
 # )
 
-MAX_FOTO = int(os.getenv("MAX_FOTO", "5"))
+#MAX_FOTO = int(os.getenv("MAX_FOTO", "5"))
 
 # ======================================================
 # API KEY BACKEND (PEZZA TEMPORANEA)
@@ -2106,6 +2106,7 @@ def invia_mail_perizia(email, html):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
