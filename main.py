@@ -1,30 +1,47 @@
-import os
+# ==============================
+# Standard Library
+# ==============================
+
+import base64
+import hashlib
+import io
 import json
-import time
+import logging
+import os
 import re
+import smtplib
+import socket
+import time
 from datetime import datetime, timezone
-from typing import Optional, Tuple, Any, Dict, List, Literal
-from fastapi import FastAPI, Query, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi import HTTPException
-from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from email.mime.text import MIMEText
+from math import ceil
+from typing import Any, Dict, List, Literal, Optional, Tuple
+
+# ==============================
+# Third Party Libraries
+# ==============================
+
+import bcrypt
+import pillow_avif  # noqa: F401
+import uvicorn
+from bson import ObjectId
 from difflib import SequenceMatcher
 from openai import AzureOpenAI
-import logging
 from PIL import Image
-import pillow_avif  # noqa: F401
-import base64
-import io
-import socket
-import uvicorn
-from pymongo import MongoClient
+from pydantic import BaseModel
+from pymongo import MongoClient, ReturnDocument
 from pymongo.errors import DuplicateKeyError
-from pymongo import ReturnDocument
-from bson import ObjectId
-import bcrypt
-import hashlib
-from math import ceil
+
+# ==============================
+# FastAPI
+# ==============================
+
+from fastapi import Body, FastAPI, HTTPException, Query, Request
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+
+from db.mongo import get_db
+
 
 
 # ======================================================
@@ -62,39 +79,39 @@ if not BACKEND_API_KEYS:
     logger.warning("⚠️ BACKEND_API_KEYS non configurata!")
     
 
-# ======================================================
-# MONGO CONFIG
-# ======================================================
-MONGO_URI = os.getenv("MONGO_URI", "")
-MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "autentica")
+# # ======================================================
+# # MONGO CONFIG
+# # ======================================================
+# MONGO_URI = os.getenv("MONGO_URI", "")
+# MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "autentica")
 
 
-# Collezioni (nomenclatura chiara)
-analisi_col = "aut_analisi"
-foto_col = "aut_analisi_foto"
-prompts_col = "aut_prompts"
-prompt_versions_col = "aut_prompt_versions"
-users_col = "aut_users"
-vademecum_col = "aut_vademecum"
-login_log_col = "aut_login_log"
+# # Collezioni (nomenclatura chiara)
+# analisi_col = "aut_analisi"
+# foto_col = "aut_analisi_foto"
+# prompts_col = "aut_prompts"
+# prompt_versions_col = "aut_prompt_versions"
+# users_col = "aut_users"
+# vademecum_col = "aut_vademecum"
+# login_log_col = "aut_login_log"
 
 
-_mongo_client: Optional[MongoClient] = None
+# _mongo_client: Optional[MongoClient] = None
 
-def get_mongo_client() -> MongoClient:
-    global _mongo_client
-    if _mongo_client is None:
-        if not MONGO_URI:
-            raise RuntimeError("MONGO_URI missing (set it in App Service env vars)")
-        # DocumentDB Mongo compat: TLS obbligatorio, SRV ok
-        _mongo_client = MongoClient(
-            MONGO_URI,
-            socketTimeoutMS=120000,
-            connectTimeoutMS=20000,
-            serverSelectionTimeoutMS=20000,
-            retryWrites=False
-        )
-    return _mongo_client
+# def get_mongo_client() -> MongoClient:
+#     global _mongo_client
+#     if _mongo_client is None:
+#         if not MONGO_URI:
+#             raise RuntimeError("MONGO_URI missing (set it in App Service env vars)")
+#         # DocumentDB Mongo compat: TLS obbligatorio, SRV ok
+#         _mongo_client = MongoClient(
+#             MONGO_URI,
+#             socketTimeoutMS=120000,
+#             connectTimeoutMS=20000,
+#             serverSelectionTimeoutMS=20000,
+#             retryWrites=False
+#         )
+#     return _mongo_client
 
 def get_db():
     client = get_mongo_client()
@@ -1888,6 +1905,7 @@ def admin_vademecum_delete(id: str):
     return {"status": "ok", "deleted_id": id}
 
 
+
 @app.get("/periti_disponibili")
 def periti_disponibili(
     tipologia: str = Query(...),
@@ -1941,6 +1959,146 @@ def periti_disponibili(
         "count": len(periti),
         "periti": periti
     }
+
+
+
+@app.post("/richiedi_perizia")
+def richiedi_perizia(payload: Dict[str, Any] = Body(...)):
+
+    db = get_db()
+
+    analisi_id = payload.get("id_analisi")
+    perito_id = payload.get("perito_id")
+
+    col_analisi = db["analisi"]
+    col_periti = db["periti"]
+    col_richieste = db["richieste_perizia"]
+
+    analisi = col_analisi.find_one({"id_analisi": analisi_id})
+
+    if not analisi:
+        return {"error": "analisi non trovata"}
+
+    perito = col_periti.find_one({"_id": ObjectId(perito_id)})
+
+    if not perito:
+        return {"error": "perito non trovato"}
+
+    # genera html report
+    html = genera_report_perizia(analisi, perito)
+
+    # invio email
+    invia_mail_perizia(perito["email"], html)
+
+    richiesta = {
+        "id_analisi": analisi_id,
+        "perito_id": perito_id,
+        "user_id": analisi.get("user_id"),
+        "stato": "inviata",
+        "created_at": datetime.utcnow()
+    }
+
+    col_richieste.insert_one(richiesta)
+
+    return {"status": "ok"}
+
+
+def genera_report_perizia(analisi, perito):
+
+    foto_html = ""
+
+    for f in analisi.get("foto", []):
+        foto_html += f'<img src="{f}" width="220" style="margin:10px;">'
+
+    html = f"""
+<html>
+<body style="font-family:Arial;background:#f4f6f8;padding:30px">
+
+<div style="
+background:white;
+padding:30px;
+border-radius:10px;
+max-width:800px;
+box-shadow:0 2px 8px rgba(0,0,0,0.1)
+">
+
+<h2>Richiesta perizia - Autentica</h2>
+
+<p>
+È stata effettuata una nuova analisi che richiede verifica peritale.
+</p>
+
+<hr>
+
+<h3>Dati analisi</h3>
+
+<b>ID analisi:</b> {analisi.get("id_analisi")}<br>
+<b>Utente:</b> {analisi.get("user_id")}<br>
+<b>Tipologia:</b> {analisi.get("tipologia")}<br>
+
+<br>
+
+<h3>Risultato AI</h3>
+
+<b>Probabilità contraffazione:</b> {analisi.get("percentuale_contraffazione")}%
+
+<br><br>
+
+<h3>Immagini analisi</h3>
+
+{foto_html}
+
+<br><br>
+
+<a href="https://autentica.app/analisi/{analisi.get("id_analisi")}"
+style="
+background:#2c7be5;
+color:white;
+padding:12px 20px;
+text-decoration:none;
+border-radius:6px;
+font-weight:bold
+">
+
+Apri analisi completa
+
+</a>
+
+</div>
+
+</body>
+</html>
+"""
+
+    return html
+
+
+
+
+
+def invia_mail_perizia(email, html):
+
+    smtp_host = os.getenv("SMTP_HOST")
+    smtp_port = int(os.getenv("SMTP_PORT", "587"))
+    smtp_user = os.getenv("SMTP_USER")
+    smtp_pass = os.getenv("SMTP_PASSWORD")
+    mail_from = os.getenv("MAIL_FROM")
+
+    msg = MIMEText(html, "html")
+
+    msg["Subject"] = "Richiesta perizia - Autentica"
+    msg["From"] = mail_from
+    msg["To"] = email
+
+    with smtplib.SMTP(smtp_host, smtp_port) as s:
+
+        s.starttls()
+
+        if smtp_user and smtp_pass:
+            s.login(smtp_user, smtp_pass)
+
+        s.send_message(msg)
+
 # # ======================================================
 # # MAIN SERVER
 # # ======================================================
@@ -1948,6 +2106,9 @@ def periti_disponibili(
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
+
+
 
 
 
