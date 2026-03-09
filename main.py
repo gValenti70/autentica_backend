@@ -75,39 +75,39 @@ if not BACKEND_API_KEYS:
     logger.warning("⚠️ BACKEND_API_KEYS non configurata!")
     
 
-# ======================================================
-# MONGO CONFIG
-# ======================================================
-MONGO_URI = os.getenv("MONGO_URI", "")
-MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "autentica")
+# # ======================================================
+# # MONGO CONFIG
+# # ======================================================
+# MONGO_URI = os.getenv("MONGO_URI", "")
+# MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "autentica")
 
 
-# Collezioni (nomenclatura chiara)
-analisi_col = "aut_analisi"
-foto_col = "aut_analisi_foto"
-prompts_col = "aut_prompts"
-prompt_versions_col = "aut_prompt_versions"
-users_col = "aut_users"
-vademecum_col = "aut_vademecum"
-login_log_col = "aut_login_log"
+# # Collezioni (nomenclatura chiara)
+# analisi_col = "aut_analisi"
+# foto_col = "aut_analisi_foto"
+# prompts_col = "aut_prompts"
+# prompt_versions_col = "aut_prompt_versions"
+# users_col = "aut_users"
+# vademecum_col = "aut_vademecum"
+# login_log_col = "aut_login_log"
 
 
-_mongo_client: Optional[MongoClient] = None
+# _mongo_client: Optional[MongoClient] = None
 
-def get_mongo_client() -> MongoClient:
-    global _mongo_client
-    if _mongo_client is None:
-        if not MONGO_URI:
-            raise RuntimeError("MONGO_URI missing (set it in App Service env vars)")
-        # DocumentDB Mongo compat: TLS obbligatorio, SRV ok
-        _mongo_client = MongoClient(
-            MONGO_URI,
-            socketTimeoutMS=120000,
-            connectTimeoutMS=20000,
-            serverSelectionTimeoutMS=20000,
-            retryWrites=False
-        )
-    return _mongo_client
+# def get_mongo_client() -> MongoClient:
+#     global _mongo_client
+#     if _mongo_client is None:
+#         if not MONGO_URI:
+#             raise RuntimeError("MONGO_URI missing (set it in App Service env vars)")
+#         # DocumentDB Mongo compat: TLS obbligatorio, SRV ok
+#         _mongo_client = MongoClient(
+#             MONGO_URI,
+#             socketTimeoutMS=120000,
+#             connectTimeoutMS=20000,
+#             serverSelectionTimeoutMS=20000,
+#             retryWrites=False
+#         )
+#     return _mongo_client
 
 def get_db():
     client = get_mongo_client()
@@ -2102,6 +2102,7 @@ def invia_mail_perizia(email, html):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
