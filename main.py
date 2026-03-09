@@ -50,19 +50,19 @@ from db.mongo import get_db
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
-# ======================================================
-# CONFIG OPENAI
-# ======================================================
-AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "https://autenticagpt.openai.azure.com/")
-AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
-AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
-DEPLOYMENT_GPT = os.getenv("DEPLOYMENT_GPT", "gpt-5.1-chat")
+# # ======================================================
+# # CONFIG OPENAI
+# # ======================================================
+# AZURE_OPENAI_ENDPOINT = os.getenv("AZURE_OPENAI_ENDPOINT", "https://autenticagpt.openai.azure.com/")
+# AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
+# AZURE_OPENAI_API_VERSION = os.getenv("AZURE_OPENAI_API_VERSION", "2024-12-01-preview")
+# DEPLOYMENT_GPT = os.getenv("DEPLOYMENT_GPT", "gpt-5.1-chat")
 
-client_gpt = AzureOpenAI(
-    azure_endpoint=AZURE_OPENAI_ENDPOINT,
-    api_key=AZURE_OPENAI_API_KEY,
-    api_version=AZURE_OPENAI_API_VERSION,
-)
+# client_gpt = AzureOpenAI(
+#     azure_endpoint=AZURE_OPENAI_ENDPOINT,
+#     api_key=AZURE_OPENAI_API_KEY,
+#     api_version=AZURE_OPENAI_API_VERSION,
+# )
 
 MAX_FOTO = int(os.getenv("MAX_FOTO", "5"))
 
@@ -2106,6 +2106,7 @@ def invia_mail_perizia(email, html):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
