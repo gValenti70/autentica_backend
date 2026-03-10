@@ -44,6 +44,7 @@ from db.mongo import get_db
 from core.config import *
 from services.mailer import invia_mail_perizia
 from services.perizia import genera_report_perizia
+from services.openai_client import client_gpt
 
 # ======================================================
 # LOGGING
@@ -2009,6 +2010,7 @@ def richiedi_perizia(payload: Dict[str, Any] = Body(...)):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
