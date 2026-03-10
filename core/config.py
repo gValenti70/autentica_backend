@@ -1,7 +1,7 @@
 import os
 
 # ==============================
-# OPENAI
+# AZURE OPENAI
 # ==============================
 
 AZURE_OPENAI_ENDPOINT = os.getenv(
@@ -9,10 +9,10 @@ AZURE_OPENAI_ENDPOINT = os.getenv(
     "https://autenticagpt.openai.azure.com/"
 )
 
-AZURE_OPENAI_API_KEY = os.getenv("AZURE_OPENAI_API_KEY", "")
+AZURE_OPENAI_KEY = os.getenv("AZURE_OPENAI_KEY", "")
 
-AZURE_OPENAI_API_VERSION = os.getenv(
-    "AZURE_OPENAI_API_VERSION",
+AZURE_OPENAI_VERSION = os.getenv(
+    "AZURE_OPENAI_VERSION",
     "2024-12-01-preview"
 )
 
@@ -37,9 +37,9 @@ SMTP_PASSWORD = os.getenv("SMTP_PASSWORD")
 MAIL_FROM = os.getenv("MAIL_FROM")
 
 
-# ======================================================
+# ==============================
 # MONGO COLLECTIONS
-# ======================================================
+# ==============================
 
 analisi_col = "aut_analisi"
 foto_col = "aut_analisi_foto"
