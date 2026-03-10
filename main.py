@@ -171,13 +171,9 @@ async def enforce_api_key(request: Request, call_next):
 @app.on_event("startup")
 def startup():
     try:
-        client = get_mongo_client()
-        client.admin.command("ping")
+        db = get_db()
+        db.command("ping")
         logger.info("[MONGO] Connessione OK")
-
-        # ⚠️ COMMENTARE in ambienti senza permessi admin
-        # ensure_indexes()
-
     except Exception as e:
         logger.error(f"[MONGO] Startup error: {e}")
 
@@ -2013,6 +2009,7 @@ def richiedi_perizia(payload: Dict[str, Any] = Body(...)):
 #     config = uvicorn.Config(app, host="127.0.0.1",port=8077)
 #     server = uvicorn.Server(config)
 #     await server.serve()
+
 
 
 
